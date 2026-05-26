@@ -25,7 +25,7 @@ export function useSupabaseAuth() {
       lastFetchedUserId.current = userId;
       
       try {
-        const { data, error } = await supabase
+        const { data, error } = await supabase!
           .from('org_memberships')
           .select('organizations(name)')
           .eq('user_id', userId)
