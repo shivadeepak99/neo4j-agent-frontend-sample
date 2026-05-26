@@ -3,16 +3,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@/hooks/useQuery';
 import { useSessions } from '@/hooks/useSessions';
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { QueryInput } from '@/components/QueryInput';
 import { CandidateList } from '@/components/CandidateList';
-import { MessageSquare, Plus, Menu, X, HelpCircle, ChevronRight, Building, Sparkles, Trash2, User, Loader2, Moon, Sun } from 'lucide-react';
+import { MessageSquare, Plus, Menu, X, HelpCircle, ChevronRight, Building, Sparkles, Trash2, User, Loader2, Moon, Sun, LogIn, LogOut, AlertCircle } from 'lucide-react';
 
 export default function Dashboard() {
-  const { sessions, currentSessionId, createSession, loadSession, loadSessionsList, deleteSession } = useSessions();
-  const { conversationHistory, loading, loadingProgress, sendQuery, lastQuery, resetQueryState, setInitialHistory } = useQuery();
+  const { session, user, orgName, loading: authLoading, authError, accessToken, signIn, signOut } = useSupabaseAuth();
+  const { sessions, currentSessionId, createSession, loadSession, loadSessionsList, deleteSession } = useSessions(accessToken);
+  const { conversationHistory, loading, loadingProgress, sendQuery, lastQuery, resetQueryState, setInitialHistoryFromMessages } = useQuery(accessToken);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [viewedCandidatesIndex, setViewedCandidatesIndex] = useState<number | null>(null);
+  const [email, setEmail] = useState('skyfireasura@gmail.com');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   
   // Ref for auto-scrolling to bottom when messages change
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -20,33 +25,16 @@ export default function Dashboard() {
   const loadSessionHistory = async (sessionId: string) => {
     resetQueryState();
     const sessionDetails = await loadSession(sessionId);
-    if (sessionDetails && sessionDetails.turns && sessionDetails.turns.length > 0) {
-       const mappedHistory: any[] = [];
-       const totalTurns = sessionDetails.turns.length;
-       
-       sessionDetails.turns.forEach((turn: any, index: number) => {
-          mappedHistory.push({ type: 'user', text: turn.userQuery || turn.user_query });
-          
-          // The backend only provides `lastResultSummaries` at the root, which corresponds to the very last turn.
-          // Therefore, we only attach those candidates to the final agent response in the history.
-          const isLastTurn = index === totalTurns - 1;
-          const candidates = isLastTurn ? (sessionDetails.lastResultSummaries || []) : [];
-          
-          mappedHistory.push({ 
-             type: 'agent', 
-             text: turn.agentAnswer || turn.agent_answer || "Search finished", 
-             candidates: candidates.length > 0 ? candidates : undefined 
-          });
-       });
-       setInitialHistory(mappedHistory);
+    if (sessionDetails?.messages) {
+       setInitialHistoryFromMessages(sessionDetails.messages);
     }
   };
 
   useEffect(() => {
      const init = async () => {
+       if (!accessToken) return;
        const fetched = await loadSessionsList();
        if (fetched && fetched.length > 0) {
-          // Auto-load the most recent session from the backend on fresh load
           await loadSessionHistory(fetched[0].sessionId);
        }
      };
@@ -56,7 +44,7 @@ export default function Dashboard() {
      if (isDarkMode) {
         document.documentElement.classList.add('dark');
      }
-  }, []);
+  }, [accessToken]);
 
   // Sync dark mode state with Tailwind class
   useEffect(() => {
@@ -71,12 +59,11 @@ export default function Dashboard() {
      if (bottomRef.current) {
         bottomRef.current.scrollIntoView({ behavior: 'smooth' });
      }
-     
-     // Whenever a new query is submitted or finishes, reset the viewed candidates to jump back to "latest" automatically
-     setViewedCandidatesIndex(null);
   }, [loading, loadingProgress, conversationHistory.length]);
 
   const handleSearch = async (query: string) => {
+    if (!accessToken) return;
+    setViewedCandidatesIndex(null);
     let activeSessionId = currentSessionId;
     if (activeSessionId === 'default') {
        activeSessionId = await createSession(query.substring(0, 30));
@@ -85,6 +72,7 @@ export default function Dashboard() {
   };
 
   const handleClarification = async (answer: string) => {
+     if (!accessToken) return;
      let activeSessionId = currentSessionId;
      if (activeSessionId === 'default') {
         const titleSource = lastQuery ? lastQuery : answer;
@@ -130,6 +118,22 @@ export default function Dashboard() {
      if (currentSessionId === sessionId) {
         resetQueryState();
      }
+  };
+
+  const handleSignIn = async (event: React.FormEvent<HTMLFormElement>) => {
+     event.preventDefault();
+     setSigningIn(true);
+     const ok = await signIn(email.trim(), password);
+     setSigningIn(false);
+     if (ok) {
+        setPassword('');
+        resetQueryState();
+     }
+  };
+
+  const handleSignOut = async () => {
+     await signOut();
+     resetQueryState();
   };
 
   return (
@@ -229,11 +233,29 @@ export default function Dashboard() {
             </button>
             <div className="h-6 w-px bg-gray-200 dark:bg-slate-700 hidden sm:block"></div>
             <div className="flex flex-row items-center gap-2">
-               <div className="w-8 h-8 flex-shrink-0 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-400 rounded-full flex items-center justify-center font-bold text-sm">
+               <div className="w-8 h-8 flex-shrink-0 bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-400 rounded-full flex items-center justify-center font-bold text-sm" title={orgName || 'Building'}>
                  <Building className="w-4 h-4" />
                </div>
-               <span className="text-sm font-medium text-gray-700 dark:text-gray-300 hidden sm:inline-block">Admin Portal</span>
+               <div className="hidden sm:flex flex-col">
+                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                   {user?.email || 'Not signed in'}
+                 </span>
+                 {orgName && (
+                   <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                     {orgName}
+                   </span>
+                 )}
+               </div>
             </div>
+            {session && (
+              <button
+                onClick={handleSignOut}
+                className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 rounded-full transition-colors"
+                title="Sign out"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </header>
 
@@ -245,21 +267,67 @@ export default function Dashboard() {
               <div className="max-w-5xl mx-auto pb-6">
             
             {/* Introductory Text if no message logs exist */}
+            {!session && !authLoading && (
+              <div className="mb-8 mt-6 sm:mt-10 animate-in fade-in max-w-md mx-auto">
+                <div className="bg-white dark:bg-white/[0.03] border border-gray-200 dark:border-white/10 rounded-2xl p-5 shadow-sm">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-slate-800 flex items-center justify-center">
+                      <LogIn className="w-5 h-5 text-gray-900 dark:text-white" />
+                    </div>
+                    <div>
+                      <h2 className="font-bold text-gray-900 dark:text-white">Sign in with Supabase</h2>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Uses the real JWT flow for /api/*.</p>
+                    </div>
+                  </div>
+                  <form onSubmit={handleSignIn} className="space-y-3">
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      placeholder="Email"
+                      className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400"
+                    />
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder="Password"
+                      className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400"
+                    />
+                    {authError && (
+                      <div className="flex gap-2 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-300">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                        <span>{authError}</span>
+                      </div>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={signingIn || authLoading || !email || !password}
+                      className="w-full rounded-xl bg-gray-900 dark:bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {signingIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                      Sign in
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
             {conversationHistory.length === 0 && !loading && (
-              <div className="mb-8 text-center mt-6 sm:mt-10 animate-in fade-in">
+              <div className={`mb-8 text-center mt-6 sm:mt-10 animate-in fade-in ${!session ? 'opacity-40' : ''}`}>
                 <div className="w-16 h-16 bg-gray-100 dark:bg-white/5 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-gray-200 dark:border-white/10 shadow-sm">
                    <Sparkles className="w-8 h-8 text-gray-900 dark:text-white" />
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-3">Company Candidate Database</h2>
                 <p className="text-gray-500 dark:text-gray-400 max-w-xl mx-auto text-sm sm:text-base mb-8">
-                  Search through your organization's internal candidate pool using natural language. Query by specific roles, vessel experience, availability, or status.
+                  Search through your organization&apos;s internal candidate pool using natural language. Query by specific roles, vessel experience, availability, or status.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto text-left">
                    <div className="bg-white dark:bg-white/[0.02] dark:backdrop-blur-md p-4 rounded-xl border border-gray-200 dark:border-white/5 shadow-sm hover:shadow-md transition-shadow">
-                      <p className="text-sm text-gray-600 dark:text-slate-300">"Find me a Master with VLCC experience ready to join next month"</p>
+                      <p className="text-sm text-gray-600 dark:text-slate-300">&quot;Find me a Master with VLCC experience ready to join next month&quot;</p>
                    </div>
                    <div className="bg-white dark:bg-white/[0.02] dark:backdrop-blur-md p-4 rounded-xl border border-gray-200 dark:border-white/5 shadow-sm hover:shadow-md transition-shadow">
-                      <p className="text-sm text-gray-600 dark:text-slate-300">"Show me Chief Officers currently available for Aframax"</p>
+                      <p className="text-sm text-gray-600 dark:text-slate-300">&quot;Show me Chief Officers currently available for Aframax&quot;</p>
                    </div>
                 </div>
               </div>
@@ -397,7 +465,7 @@ export default function Dashboard() {
                  <div className="shadow-2xl rounded-full">
                    <QueryInput 
                      onSearch={handleSearch} 
-                     loading={loading} 
+                     loading={loading || !session} 
                    />
                  </div>
               </div>
