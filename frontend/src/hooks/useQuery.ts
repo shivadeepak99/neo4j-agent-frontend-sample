@@ -45,7 +45,7 @@ function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
   for (const message of messages) {
     const text = textFromParts(message.parts);
     if (message.role === 'user') {
-      turns.push({ type: 'user', text });
+      turns.push({ type: 'user', text, messageId: message.id });
       continue;
     }
 
@@ -54,6 +54,7 @@ function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
     turns.push({
       type: 'agent',
       text: text || 'Search finished',
+      messageId: message.id,
       candidates: candidates.length > 0 ? candidates : undefined,
     });
   }
@@ -159,6 +160,13 @@ export function useQuery(accessToken: string | null) {
 
       const ensureAgentMessage = (messageId?: string) => {
         setConversationHistory(prev => {
+          if (messageId) {
+            const existingIndex = prev.findIndex(turn => turn.messageId === messageId);
+            if (existingIndex >= 0) {
+              activeAgentIndexRef.current = existingIndex;
+              return prev;
+            }
+          }
           const existingIndex = activeAgentIndexRef.current;
           if (existingIndex != null && prev[existingIndex]) {
             if (messageId && prev[existingIndex].messageId !== messageId) {
