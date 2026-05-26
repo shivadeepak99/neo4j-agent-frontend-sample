@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { Candidate, CandidateReference, ChatMessage, UIMessagePart } from '@/lib/api-types';
 import { API_URL } from '@/lib/api-client';
 
@@ -6,6 +6,8 @@ export type HistoricalTurn = {
   type: 'user' | 'agent';
   text: string;
   candidates?: Candidate[];
+  messageId?: string;
+  reasoning?: string;
   clarification?: {
     question: string;
     options: string[];
@@ -59,9 +61,12 @@ function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
 }
 
 function parseUiStreamPayload(payload: string) {
-  const prefix = payload.slice(0, 1);
-  const jsonText = payload.slice(2);
-  if (!payload[1] || payload[1] !== ':') return null;
+  const colonIndex = payload.indexOf(':');
+  if (colonIndex <= 0) return null;
+  const prefix = payload.slice(0, colonIndex);
+  if (prefix.length !== 1) return null;
+  const jsonText = payload.slice(colonIndex + 1);
+  if (!jsonText) return null;
   try {
     return { prefix, value: JSON.parse(jsonText) };
   } catch {
@@ -75,12 +80,14 @@ export function useQuery(accessToken: string | null) {
   
   // Track conversational history inline for the current active view limit
   const [conversationHistory, setConversationHistory] = useState<HistoricalTurn[]>([]); 
+  const activeAgentIndexRef = useRef<number | null>(null);
   
   const [lastQuery, setLastQuery] = useState<string | null>(null);
 
   const resetQueryState = useCallback(() => {
     setConversationHistory([]);
     setLastQuery(null);
+    activeAgentIndexRef.current = null;
   }, []);
 
   const setInitialHistory = useCallback((turns: HistoricalTurn[]) => {
@@ -101,6 +108,7 @@ export function useQuery(accessToken: string | null) {
       return;
     }
 
+    activeAgentIndexRef.current = null;
     setLoading(true);
     setLoadingProgress('Connecting...');
     setLastQuery(clarificationAnswer ? lastQuery : query);
@@ -149,6 +157,112 @@ export function useQuery(accessToken: string | null) {
       let streamedText = '';
       let streamedCandidates: Candidate[] = [];
 
+      const ensureAgentMessage = (messageId?: string) => {
+        setConversationHistory(prev => {
+          const existingIndex = activeAgentIndexRef.current;
+          if (existingIndex != null && prev[existingIndex]) {
+            if (messageId && prev[existingIndex].messageId !== messageId) {
+              const next = prev.slice();
+              next[existingIndex] = { ...prev[existingIndex], messageId };
+              return next;
+            }
+            return prev;
+          }
+          const next = [...prev, { type: 'agent' as const, text: '', messageId }];
+          activeAgentIndexRef.current = next.length - 1;
+          return next;
+        });
+      };
+
+      const updateAgentMessage = (updater: (current: HistoricalTurn) => HistoricalTurn) => {
+        setConversationHistory(prev => {
+          const index = activeAgentIndexRef.current;
+          if (index == null || !prev[index]) return prev;
+          const next = prev.slice();
+          next[index] = updater(prev[index]);
+          return next;
+        });
+      };
+
+      const processLine = (rawLine: string, elapsed: string) => {
+        const trimmedLine = rawLine.trim();
+        if (!trimmedLine.startsWith('data:')) return;
+        const dataStr = trimmedLine.slice(5).trim();
+        if (!dataStr || dataStr === '[DONE]') return;
+
+        const event = parseUiStreamPayload(dataStr);
+        if (!event) return;
+
+        if (event.prefix === 'f') {
+          const messageId = typeof event.value?.messageId === 'string' ? event.value.messageId : undefined;
+          console.log(`[useQuery] 📡 Stream connected: ${elapsed}ms`);
+          ensureAgentMessage(messageId);
+          setLoadingProgress('Connected, analysing query...');
+          return;
+        }
+
+        if (event.prefix === 'g') {
+          const reasoningText = typeof event.value?.text === 'string' ? event.value.text : '';
+          console.log(`[useQuery] 🧠 Reasoning started: ${elapsed}ms`);
+          if (reasoningText) {
+            ensureAgentMessage();
+            updateAgentMessage(current => ({ ...current, reasoning: reasoningText }));
+          }
+          setLoadingProgress('Thinking...');
+          return;
+        }
+
+        if (event.prefix === '9') {
+          const toolName = event.value?.toolName as string | undefined;
+          console.log(`[useQuery] 🛠️ Tool run (${toolName || 'search'}): ${elapsed}ms`);
+          setLoadingProgress(
+            toolName === 'runSearch' || toolName?.startsWith('search')
+              ? 'Searching candidate database...'
+              : 'Running tool: ' + (toolName || 'search') + '...'
+          );
+          return;
+        }
+
+        if (event.prefix === 'a') {
+          console.log(`[useQuery] 📊 Tool result received: ${elapsed}ms`);
+          const result = event.value?.result as UIMessagePart['output'];
+          const found = candidatesFromToolOutput(result);
+          if (found.length > 0) {
+            streamedCandidates = found;
+            setLoadingProgress(`Found ${found.length} candidate${found.length !== 1 ? 's' : ''}, composing answer...`);
+          } else {
+            setLoadingProgress('Search complete, composing answer...');
+          }
+          if (found.length > 0) {
+            ensureAgentMessage();
+            updateAgentMessage(current => ({ ...current, candidates: found }));
+          }
+          return;
+        }
+
+        if (event.prefix === '0') {
+          const delta = typeof event.value === 'string' ? event.value : String(event.value ?? '');
+          if (!delta) return;
+          if (!streamedText) {
+            console.log(`[useQuery] 🔤 First text token (TTFT): ${elapsed}ms`);
+            setLoadingProgress('Writing answer...');
+          }
+          streamedText += delta;
+          ensureAgentMessage();
+          updateAgentMessage(current => ({
+            ...current,
+            text: streamedText,
+            candidates: streamedCandidates.length > 0 ? streamedCandidates : current.candidates,
+          }));
+          return;
+        }
+
+        if (event.prefix === 'e' || event.prefix === 'd') {
+          console.log(`[useQuery] ✅ Stream complete / Step finish: ${elapsed}ms`);
+          setLoadingProgress(null);
+        }
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         
@@ -162,71 +276,55 @@ export function useQuery(accessToken: string | null) {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-           if (!line.startsWith('data: ')) continue;
-           const dataStr = line.slice(6).trim();
-           if (!dataStr || dataStr === '[DONE]') continue;
-
-           const event = parseUiStreamPayload(dataStr);
-           if (!event) continue;
-
-           if (event.prefix === 'f') {
-             // stream start — backend connected
-             console.log(`[useQuery] 📡 Stream connected: ${elapsed}ms`);
-             setLoadingProgress('Connected, analysing query...');
-           } else if (event.prefix === 'g') {
-             // reasoning / chain-of-thought part — show brief status
-             console.log(`[useQuery] 🧠 Reasoning started: ${elapsed}ms`);
-             setLoadingProgress('Reasoning...');
-           } else if (event.prefix === '9') {
-             // tool call input-available — search is executing
-             const toolName = event.value?.toolName as string | undefined;
-             console.log(`[useQuery] 🛠️ Tool run (${toolName || 'search'}): ${elapsed}ms`);
-             setLoadingProgress(
-               toolName === 'runSearch' || toolName?.startsWith('search')
-                 ? 'Searching candidate database...'
-                 : 'Running tool: ' + (toolName || 'search') + '...'
-             );
-           } else if (event.prefix === 'a') {
-             // tool result received — extract candidates
-             console.log(`[useQuery] 📊 Tool result received: ${elapsed}ms`);
-             const result = event.value?.result as UIMessagePart['output'];
-             const found = candidatesFromToolOutput(result);
-             if (found.length > 0) {
-               streamedCandidates = found;
-               setLoadingProgress(`Found ${found.length} candidate${found.length !== 1 ? 's' : ''}, composing answer...`);
-             } else {
-               setLoadingProgress('Search complete, composing answer...');
-             }
-           } else if (event.prefix === '0') {
-             // text delta — answer is streaming in
-             if (!streamedText) {
-                console.log(`[useQuery] 🔤 First text token (TTFT): ${elapsed}ms`);
-             }
-             streamedText += String(event.value || '');
-             if (!streamedText.trim()) continue;
-             setLoadingProgress('Writing answer...');
-           } else if (event.prefix === 'e' || event.prefix === 'd') {
-             // step-finish / message-done — clear progress
-             console.log(`[useQuery] ✅ Stream complete / Step finish: ${elapsed}ms`);
-             setLoadingProgress(null);
-           }
+          processLine(line, elapsed);
         }
+      }
+
+      buffer += decoder.decode();
+      if (buffer.trim()) {
+        const elapsed = (performance.now() - startTime).toFixed(0);
+        processLine(buffer, elapsed);
       }
 
       setLoading(false);
       setLoadingProgress(null);
-
-      setConversationHistory(prev => [...prev, { 
-         type: 'agent', 
-         text: streamedText || "Search finished.",
-         candidates: streamedCandidates.length > 0 ? streamedCandidates : undefined
-      }]);
+      setConversationHistory(prev => {
+        const index = activeAgentIndexRef.current;
+        if (index == null || !prev[index]) {
+          if (!streamedText && streamedCandidates.length === 0) return prev;
+          return [...prev, {
+            type: 'agent',
+            text: streamedText || 'Search finished.',
+            candidates: streamedCandidates.length > 0 ? streamedCandidates : undefined,
+          }];
+        }
+        if (!prev[index].text || !prev[index].text.trim()) {
+          const next = prev.slice();
+          next[index] = {
+            ...prev[index],
+            text: streamedText || 'Search finished.',
+            candidates: streamedCandidates.length > 0 ? streamedCandidates : prev[index].candidates,
+          };
+          return next;
+        }
+        return prev;
+      });
+      activeAgentIndexRef.current = null;
 
     } catch (e) {
        console.error("Stream failed", e);
        setLoading(false);
        setLoadingProgress(null);
-       setConversationHistory(prev => [...prev, { type: 'agent', text: "Failed to connect to backend search streams natively." }]);
+       setConversationHistory(prev => {
+         const index = activeAgentIndexRef.current;
+         if (index == null || !prev[index]) {
+           return [...prev, { type: 'agent', text: 'Failed to connect to backend search streams natively.' }];
+         }
+         const next = prev.slice();
+         next[index] = { ...prev[index], text: 'Failed to connect to backend search streams natively.' };
+         return next;
+       });
+       activeAgentIndexRef.current = null;
     }
   }, [accessToken, lastQuery]);
 
