@@ -15,7 +15,7 @@ export default function Dashboard() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [viewedCandidatesIndex, setViewedCandidatesIndex] = useState<number | null>(null);
-  const [email, setEmail] = useState('skyfireasura@gmail.com');
+  const [email, setEmail] = useState('org1@gmail.com');
   const [password, setPassword] = useState('');
   const [signingIn, setSigningIn] = useState(false);
   
