@@ -58,6 +58,10 @@ function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
       candidates: candidates.length > 0 ? candidates : undefined,
     });
   }
+  console.log('[history] hydrated turns', {
+    count: turns.length,
+    agentCount: turns.filter(turn => turn.type === 'agent').length,
+  });
   return turns;
 }
 
@@ -82,6 +86,9 @@ export function useQuery(accessToken: string | null) {
   // Track conversational history inline for the current active view limit
   const [conversationHistory, setConversationHistory] = useState<HistoricalTurn[]>([]); 
   const activeAgentIndexRef = useRef<number | null>(null);
+  const activeMessageIdRef = useRef<string | null>(null);
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
+  const pendingAgentRef = useRef(false);
   
   const [lastQuery, setLastQuery] = useState<string | null>(null);
 
@@ -89,6 +96,9 @@ export function useQuery(accessToken: string | null) {
     setConversationHistory([]);
     setLastQuery(null);
     activeAgentIndexRef.current = null;
+    activeMessageIdRef.current = null;
+    seenMessageIdsRef.current.clear();
+    pendingAgentRef.current = false;
   }, []);
 
   const setInitialHistory = useCallback((turns: HistoricalTurn[]) => {
@@ -159,25 +169,46 @@ export function useQuery(accessToken: string | null) {
       let streamedCandidates: Candidate[] = [];
 
       const ensureAgentMessage = (messageId?: string) => {
+        if (messageId) {
+          // Full stop: if we've seen this messageId, the bubble already exists or
+          // is being created. React 18 may call the setState updater multiple times
+          // with the same prev — this guard must fire BEFORE setConversationHistory.
+          if (seenMessageIdsRef.current.has(messageId)) return;
+          seenMessageIdsRef.current.add(messageId);
+          activeMessageIdRef.current = messageId;
+        } else {
+          // No messageId — don't create a second bubble if one is already active.
+          if (activeAgentIndexRef.current != null || pendingAgentRef.current) return;
+        }
+
+        if (pendingAgentRef.current) return;
+        pendingAgentRef.current = true;
         setConversationHistory(prev => {
           if (messageId) {
+            // Pure check: does a bubble with this ID already exist in the array?
             const existingIndex = prev.findIndex(turn => turn.messageId === messageId);
             if (existingIndex >= 0) {
               activeAgentIndexRef.current = existingIndex;
+              pendingAgentRef.current = false;
               return prev;
             }
           }
+          // Attach messageId to existing active slot if one exists.
           const existingIndex = activeAgentIndexRef.current;
           if (existingIndex != null && prev[existingIndex]) {
             if (messageId && prev[existingIndex].messageId !== messageId) {
               const next = prev.slice();
               next[existingIndex] = { ...prev[existingIndex], messageId };
+              pendingAgentRef.current = false;
               return next;
             }
+            pendingAgentRef.current = false;
             return prev;
           }
+          // Create a new agent bubble.
           const next = [...prev, { type: 'agent' as const, text: '', messageId }];
           activeAgentIndexRef.current = next.length - 1;
+          pendingAgentRef.current = false;
           return next;
         });
       };
@@ -296,9 +327,18 @@ export function useQuery(accessToken: string | null) {
 
       setLoading(false);
       setLoadingProgress(null);
+      // Capture ref values into locals NOW — the setState updater runs asynchronously
+      // during React's render phase, by which point the refs below would already be
+      // cleared (null). Closures capture locals, not live ref reads.
+      const _finalIndex = activeAgentIndexRef.current;
+      const _finalMessageId = activeMessageIdRef.current;
+      activeAgentIndexRef.current = null;
+      activeMessageIdRef.current = null;
       setConversationHistory(prev => {
-        const index = activeAgentIndexRef.current;
-        if (index == null || !prev[index]) {
+        if (_finalMessageId && prev.some(turn => turn.messageId === _finalMessageId)) {
+          return prev;
+        }
+        if (_finalIndex == null || !prev[_finalIndex]) {
           if (!streamedText && streamedCandidates.length === 0) return prev;
           return [...prev, {
             type: 'agent',
@@ -306,18 +346,17 @@ export function useQuery(accessToken: string | null) {
             candidates: streamedCandidates.length > 0 ? streamedCandidates : undefined,
           }];
         }
-        if (!prev[index].text || !prev[index].text.trim()) {
+        if (!prev[_finalIndex].text || !prev[_finalIndex].text.trim()) {
           const next = prev.slice();
-          next[index] = {
-            ...prev[index],
+          next[_finalIndex] = {
+            ...prev[_finalIndex],
             text: streamedText || 'Search finished.',
-            candidates: streamedCandidates.length > 0 ? streamedCandidates : prev[index].candidates,
+            candidates: streamedCandidates.length > 0 ? streamedCandidates : prev[_finalIndex].candidates,
           };
           return next;
         }
         return prev;
       });
-      activeAgentIndexRef.current = null;
 
     } catch (e) {
        console.error("Stream failed", e);
@@ -333,6 +372,7 @@ export function useQuery(accessToken: string | null) {
          return next;
        });
        activeAgentIndexRef.current = null;
+       activeMessageIdRef.current = null;
     }
   }, [accessToken, lastQuery]);
 
