@@ -232,6 +232,15 @@ export function useQuery(accessToken: string | null) {
         const event = parseUiStreamPayload(dataStr);
         if (!event) return;
 
+        if (event.prefix === 'p') {
+          // Real-time progress label emitted by each LangGraph node as it starts.
+          // Arrives while the agent is still running — update the loading status
+          // without touching the message bubble.
+          const label = typeof event.value?.label === 'string' ? event.value.label : null;
+          if (label) setLoadingProgress(label);
+          return;
+        }
+
         if (event.prefix === 'f') {
           const messageId = typeof event.value?.messageId === 'string' ? event.value.messageId : undefined;
           console.log(`[useQuery] 📡 Stream connected: ${elapsed}ms`);
