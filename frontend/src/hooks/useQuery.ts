@@ -87,8 +87,6 @@ export function useQuery(accessToken: string | null) {
   const [conversationHistory, setConversationHistory] = useState<HistoricalTurn[]>([]); 
   const activeAgentIndexRef = useRef<number | null>(null);
   const activeMessageIdRef = useRef<string | null>(null);
-  const seenMessageIdsRef = useRef<Set<string>>(new Set());
-  const pendingAgentRef = useRef(false);
   
   const [lastQuery, setLastQuery] = useState<string | null>(null);
 
@@ -97,8 +95,6 @@ export function useQuery(accessToken: string | null) {
     setLastQuery(null);
     activeAgentIndexRef.current = null;
     activeMessageIdRef.current = null;
-    seenMessageIdsRef.current.clear();
-    pendingAgentRef.current = false;
   }, []);
 
   const setInitialHistory = useCallback((turns: HistoricalTurn[]) => {
@@ -121,7 +117,7 @@ export function useQuery(accessToken: string | null) {
 
     activeAgentIndexRef.current = null;
     setLoading(true);
-    setLoadingProgress('Connecting...');
+    setLoadingProgress('Connecting to search...');
     setLastQuery(clarificationAnswer ? lastQuery : query);
 
     const startTime = performance.now();
@@ -169,56 +165,54 @@ export function useQuery(accessToken: string | null) {
       let streamedCandidates: Candidate[] = [];
 
       const ensureAgentMessage = (messageId?: string) => {
-        if (messageId) {
-          // Full stop: if we've seen this messageId, the bubble already exists or
-          // is being created. React 18 may call the setState updater multiple times
-          // with the same prev — this guard must fire BEFORE setConversationHistory.
-          if (seenMessageIdsRef.current.has(messageId)) return;
-          seenMessageIdsRef.current.add(messageId);
-          activeMessageIdRef.current = messageId;
-        } else {
-          // No messageId — don't create a second bubble if one is already active.
-          if (activeAgentIndexRef.current != null || pendingAgentRef.current) return;
+        const id = messageId ?? activeMessageIdRef.current ?? undefined;
+        if (id) {
+          activeMessageIdRef.current = id;
         }
 
-        if (pendingAgentRef.current) return;
-        pendingAgentRef.current = true;
         setConversationHistory(prev => {
-          if (messageId) {
-            // Pure check: does a bubble with this ID already exist in the array?
-            const existingIndex = prev.findIndex(turn => turn.messageId === messageId);
-            if (existingIndex >= 0) {
-              activeAgentIndexRef.current = existingIndex;
-              pendingAgentRef.current = false;
-              return prev;
-            }
-          }
-          // Attach messageId to existing active slot if one exists.
-          const existingIndex = activeAgentIndexRef.current;
-          if (existingIndex != null && prev[existingIndex]) {
-            if (messageId && prev[existingIndex].messageId !== messageId) {
-              const next = prev.slice();
-              next[existingIndex] = { ...prev[existingIndex], messageId };
-              pendingAgentRef.current = false;
-              return next;
-            }
-            pendingAgentRef.current = false;
+          const byId = id ? prev.findIndex(turn => turn.type === 'agent' && turn.messageId === id) : -1;
+          if (byId >= 0) {
+            activeAgentIndexRef.current = byId;
             return prev;
           }
-          // Create a new agent bubble.
-          const next = [...prev, { type: 'agent' as const, text: '', messageId }];
+
+          const activeIndex = activeAgentIndexRef.current;
+          if (activeIndex != null && prev[activeIndex]?.type === 'agent') {
+            if (id && prev[activeIndex].messageId !== id) {
+              const next = prev.slice();
+              next[activeIndex] = { ...prev[activeIndex], messageId: id };
+              return next;
+            }
+            return prev;
+          }
+
+          const next = [...prev, { type: 'agent' as const, text: '', messageId: id }];
           activeAgentIndexRef.current = next.length - 1;
-          pendingAgentRef.current = false;
           return next;
         });
       };
 
       const updateAgentMessage = (updater: (current: HistoricalTurn) => HistoricalTurn) => {
+        const id = activeMessageIdRef.current ?? undefined;
+
         setConversationHistory(prev => {
-          const index = activeAgentIndexRef.current;
-          if (index == null || !prev[index]) return prev;
+          let index = id ? prev.findIndex(turn => turn.type === 'agent' && turn.messageId === id) : -1;
+          if (index < 0) {
+            const activeIndex = activeAgentIndexRef.current;
+            index = activeIndex != null && prev[activeIndex]?.type === 'agent' ? activeIndex : -1;
+          }
+
           const next = prev.slice();
-          next[index] = updater(prev[index]);
+          if (index >= 0) {
+            next[index] = updater(prev[index]);
+            activeAgentIndexRef.current = index;
+            return next;
+          }
+
+          const created = updater({ type: 'agent', text: '', messageId: id });
+          next.push(created);
+          activeAgentIndexRef.current = next.length - 1;
           return next;
         });
       };
@@ -244,30 +238,32 @@ export function useQuery(accessToken: string | null) {
         if (event.prefix === 'f') {
           const messageId = typeof event.value?.messageId === 'string' ? event.value.messageId : undefined;
           console.log(`[useQuery] 📡 Stream connected: ${elapsed}ms`);
-          ensureAgentMessage(messageId);
-          setLoadingProgress('Connected, analysing query...');
+          if (messageId) {
+            activeMessageIdRef.current = messageId;
+          }
+          // Set a generic label so the user sees something right away.
+          // The backend's `p:` node events will replace this as each node completes.
+          setLoadingProgress('Processing query...');
           return;
         }
 
         if (event.prefix === 'g') {
+          // Kept for protocol compatibility; backend does not currently emit 'g' events.
           const reasoningText = typeof event.value?.text === 'string' ? event.value.text : '';
-          console.log(`[useQuery] 🧠 Reasoning started: ${elapsed}ms`);
+          console.log(`[useQuery] 🧠 Reasoning: ${elapsed}ms`);
           if (reasoningText) {
             ensureAgentMessage();
             updateAgentMessage(current => ({ ...current, reasoning: reasoningText }));
           }
-          setLoadingProgress('Thinking...');
           return;
         }
 
         if (event.prefix === '9') {
+          // Tool call event — just log. The real progress label already came via `p:`.
           const toolName = event.value?.toolName as string | undefined;
-          console.log(`[useQuery] 🛠️ Tool run (${toolName || 'search'}): ${elapsed}ms`);
-          setLoadingProgress(
-            toolName === 'runSearch' || toolName?.startsWith('search')
-              ? 'Searching candidate database...'
-              : 'Running tool: ' + (toolName || 'search') + '...'
-          );
+          console.log(`[useQuery] 🛠️ Tool call (${toolName || 'search'}): ${elapsed}ms`);
+          // Do NOT override loadingProgress here — backend `p:` events carry the
+          // correct per-node label (e.g. "Searching candidate database...").
           return;
         }
 
@@ -277,11 +273,9 @@ export function useQuery(accessToken: string | null) {
           const found = candidatesFromToolOutput(result);
           if (found.length > 0) {
             streamedCandidates = found;
-            setLoadingProgress(`Found ${found.length} candidate${found.length !== 1 ? 's' : ''}, composing answer...`);
-          } else {
-            setLoadingProgress('Search complete, composing answer...');
-          }
-          if (found.length > 0) {
+            // Show count as a supplemental label — the `p:` from `narrate` node
+            // will replace this with "Writing answer..." when narration starts.
+            setLoadingProgress(`Found ${found.length} candidate${found.length !== 1 ? 's' : ''}...`);
             ensureAgentMessage();
             updateAgentMessage(current => ({ ...current, candidates: found }));
           }
@@ -293,7 +287,9 @@ export function useQuery(accessToken: string | null) {
           if (!delta) return;
           if (!streamedText) {
             console.log(`[useQuery] 🔤 First text token (TTFT): ${elapsed}ms`);
-            setLoadingProgress('Writing answer...');
+            // narrate's `p:` already set "Writing answer..." — clear spinner label
+            // now that actual text is arriving.
+            setLoadingProgress(null);
           }
           streamedText += delta;
           ensureAgentMessage();
@@ -344,23 +340,30 @@ export function useQuery(accessToken: string | null) {
       activeAgentIndexRef.current = null;
       activeMessageIdRef.current = null;
       setConversationHistory(prev => {
-        if (_finalMessageId && prev.some(turn => turn.messageId === _finalMessageId)) {
-          return prev;
-        }
-        if (_finalIndex == null || !prev[_finalIndex]) {
+        const finalIndexById = _finalMessageId
+          ? prev.findIndex(turn => turn.type === 'agent' && turn.messageId === _finalMessageId)
+          : -1;
+        const finalIndex = finalIndexById >= 0
+          ? finalIndexById
+          : (_finalIndex != null && prev[_finalIndex]?.type === 'agent' ? _finalIndex : -1);
+
+        if (finalIndex < 0) {
           if (!streamedText && streamedCandidates.length === 0) return prev;
           return [...prev, {
             type: 'agent',
             text: streamedText || 'Search finished.',
+            messageId: _finalMessageId ?? undefined,
             candidates: streamedCandidates.length > 0 ? streamedCandidates : undefined,
           }];
         }
-        if (!prev[_finalIndex].text || !prev[_finalIndex].text.trim()) {
+
+        if (!prev[finalIndex].text || !prev[finalIndex].text.trim()) {
           const next = prev.slice();
-          next[_finalIndex] = {
-            ...prev[_finalIndex],
+          next[finalIndex] = {
+            ...prev[finalIndex],
+            messageId: prev[finalIndex].messageId ?? _finalMessageId ?? undefined,
             text: streamedText || 'Search finished.',
-            candidates: streamedCandidates.length > 0 ? streamedCandidates : prev[_finalIndex].candidates,
+            candidates: streamedCandidates.length > 0 ? streamedCandidates : prev[finalIndex].candidates,
           };
           return next;
         }

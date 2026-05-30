@@ -5,6 +5,40 @@ export interface Session {
   updatedAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic card field types — mirrors buildResponse.ts CardField / DisplayField
+// ---------------------------------------------------------------------------
+
+export type FieldType = 'string' | 'number' | 'date' | 'boolean' | 'array';
+
+/**
+ * One labeled, typed field on a candidate card.
+ * `requested: true` means the user explicitly asked for it — the UI
+ * highlights / pins these to the top of the card.
+ */
+export interface CardField {
+  key:       string;
+  label:     string;
+  value:     unknown;
+  type:      FieldType;
+  requested: boolean;
+}
+
+/**
+ * Top-level descriptor of which dynamic columns to highlight across all cards.
+ * Use this to build a consistent column header; each card's `fields` array
+ * contains the actual values.
+ */
+export interface DisplayField {
+  key:   string;
+  label: string;
+  type:  FieldType;
+}
+
+// ---------------------------------------------------------------------------
+// UI stream message part
+// ---------------------------------------------------------------------------
+
 export interface UIMessagePart {
   type: string;
   text?: string;
@@ -16,6 +50,10 @@ export interface UIMessagePart {
     rowCount?: number;
     references?: CandidateReference[];
     rows?: Candidate[];
+    /** Dynamic columns the user asked for — used to build the column header. */
+    displayFields?: DisplayField[];
+    /** Structured narrator answer {headline, bullets} for richer rendering. */
+    answer?: { headline: string; bullets: string[] } | null;
     truncated?: boolean;
   };
   [key: string]: unknown;
@@ -37,58 +75,47 @@ export interface CandidateReference {
 }
 
 export interface Candidate {
-  // Core identity (backend field names)
+  // ── Core identity (backend v2 field names from buildResponse.ts) ──────────
   candidateId?: string;
   candidateDirId?: string;
   candidateDirectoryId?: string;
   fullName?: string;
-  fullNameNormalized?: string;
-  givenNames?: string;
-  surname?: string;
   passportId?: string;
-  // Rank
-  presentRankText?: string;
-  presentRankKey?: string;
-  targetRankText?: string;
-  department?: string;
-  // Nationality / location
-  nationalityText?: string;
-  nationalityCountryCode?: string;
-  residenceCountryText?: string;
-  currentCity?: string;
-  // Availability
-  availabilityStatus?: string;
-  availableFromDate?: string;
-  projectedAvailableFromDate?: string;
-  lastSignOffDate?: string;
-  seaDaysInCurrentFy?: number;
-  // Experience
+
+  // Backend sends these short names (not the Neo4j property names):
+  rank?: string | null;           // present_rank_text
+  nationality?: string | null;    // nationality_text
+  availability?: string | null;   // availability_status
+  score?: number;
+  matchQualityBand?: 'high' | 'medium' | 'low';
+  justification?: string;
+  certWarnings?: string[];
+  gaps?: string[];
+
+  // Dynamic per-card fields — the user's requested fields first (requested:true),
+  // then the always-on core identity fields. Render these generically so any
+  // field (age, address, email, passport…) shows up without a frontend deploy.
+  fields?: CardField[];
+
+  // ── Service analytics (used for sidebar display) ─────────────────────────
   totalServiceMonths?: number;
   contractCountTotal?: number;
-  distinctVesselTypeCount?: number;
-  distinctCompanyCount?: number;
-  avgContractDurationMonths?: number;
-  avgLeaveBetweenContractsDays?: number;
-  // Credentials
-  hasValidStcw?: boolean;
-  hasManagementLevelCert?: boolean;
-  hasOperationalLevelCert?: boolean;
-  validPassportUntil?: string;
-  validMedicalUntil?: string;
-  // Scores
-  marlinsEnglishScore?: number;
-  cesEnglishScore?: number;
-  profileCompletenessScore?: number;
-  // Contact
-  primaryEmail?: string;
-  primaryMobile?: string;
-  // Deterministic score (ranker)
-  deterministicScore?: number;
-  // Legacy / alias fields the frontend also checks
+  projectedAvailableFrom?: string | null;
+  lastSignOffDate?: string | null;
+
+  // ── Legacy / alias fields the frontend also checks ────────────────────────
   id?: string;
   name?: string;
   directoryId?: string;
   orgId?: string;
+  // Neo4j property name aliases (some historical responses used these):
+  presentRankText?: string;
+  nationalityText?: string;
+  availabilityStatus?: string;
+  fullNameNormalized?: string;
+  givenNames?: string;
+  surname?: string;
+
   [key: string]: unknown;
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery } from '@/hooks/useQuery';
 import { useSessions } from '@/hooks/useSessions';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
@@ -364,15 +365,27 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Conversation History Log (Maps all user inquiries and agent responses structurally top-to-bottom) */}
-            {conversationHistory.map((msg, i) => (
-               <div key={i} className="mb-6 animate-in slide-in-from-bottom-2 fade-in">
-                 
+            {/* Conversation History */}
+            {conversationHistory.map((msg, i) => {
+               const isStreaming = loading && i === conversationHistory.length - 1 && msg.type === 'agent';
+               return (
+               <motion.div
+                 key={i}
+                 initial={{ opacity: 0, y: 16 }}
+                 animate={{ opacity: 1, y: 0 }}
+                 transition={{ duration: 0.3, ease: 'easeOut' }}
+                 className="mb-6"
+               >
                  {msg.type === 'user' ? (
                    <div className="flex gap-4 max-w-4xl justify-end ml-auto">
-                      <div className="bg-slate-900 dark:bg-slate-800 text-white dark:text-slate-100 border border-transparent dark:border-white/10 shadow-sm rounded-xl rounded-tr-none px-5 py-3 text-sm font-medium">
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, x: 12 }}
+                        animate={{ opacity: 1, scale: 1, x: 0 }}
+                        transition={{ duration: 0.25, ease: 'easeOut' }}
+                        className="bg-slate-900 dark:bg-slate-800 text-white dark:text-slate-100 border border-transparent dark:border-white/10 shadow-sm rounded-xl rounded-tr-none px-5 py-3 text-sm font-medium"
+                      >
                           <p>{msg.text}</p>
-                      </div>
+                      </motion.div>
                       <div className="w-8 h-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 rounded-full flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
                          <User className="w-4 h-4 text-slate-500 dark:text-slate-300" />
                       </div>
@@ -423,9 +436,22 @@ export default function Dashboard() {
                                <MessageSquare className="w-4 h-4 text-slate-700 dark:text-slate-300" />
                             </div>
                             <div className="flex flex-col gap-2 w-full">
-                               <div className="bg-white dark:bg-[#0F1724] border border-slate-200 dark:border-white/10 shadow-sm rounded-xl rounded-tl-none p-5 text-slate-800 dark:text-slate-300 w-full overflow-hidden text-[13px] sm:text-sm leading-relaxed">
+                               <motion.div
+                                 initial={{ opacity: 0, y: 8 }}
+                                 animate={{ opacity: 1, y: 0 }}
+                                 transition={{ duration: 0.3, ease: 'easeOut' }}
+                                 className="bg-white dark:bg-[#0F1724] border border-slate-200 dark:border-white/10 shadow-sm rounded-xl rounded-tl-none p-5 text-slate-800 dark:text-slate-300 w-full overflow-hidden text-[13px] sm:text-sm leading-relaxed"
+                               >
                                    {formatAgentText(msg.text)}
-                               </div>
+                                   {/* Blinking cursor while this message is still streaming */}
+                                   {isStreaming && (
+                                     <motion.span
+                                       className="inline-block w-0.5 h-3.5 bg-blue-400 dark:bg-blue-500 ml-0.5 align-middle rounded-sm"
+                                       animate={{ opacity: [1, 0, 1] }}
+                                       transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut' }}
+                                     />
+                                   )}
+                               </motion.div>
                                
                                {/* Inline candidate badge linking to the sidebar */}
                                {msg.candidates && msg.candidates.length > 0 && (
@@ -460,23 +486,55 @@ export default function Dashboard() {
 
                    </div>
                  )}
-               </div>
-            ))}
+               </motion.div>
+               );
+            })}
 
-            {/* Agent Live SSE Streaming Progress Bubble pinned to end of conversation */}
+            {/* Agent Live SSE Streaming Progress Bubble — label crossfades on every node update */}
+            <AnimatePresence>
             {loading && loadingProgress && (
-               <div className="mb-8 animate-in slide-in-from-bottom-2 fade-in">
+               <motion.div
+                 key="progress-bubble"
+                 initial={{ opacity: 0, y: 12 }}
+                 animate={{ opacity: 1, y: 0 }}
+                 exit={{ opacity: 0, y: -8 }}
+                 transition={{ duration: 0.25, ease: 'easeOut' }}
+                 className="mb-8"
+               >
                  <div className="flex gap-4 max-w-3xl">
                     <div className="w-8 h-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 rounded-full flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
-                       <Loader2 className="w-4 h-4 text-slate-700 dark:text-slate-300 animate-spin" />
+                       <Loader2 className="w-4 h-4 text-slate-500 dark:text-slate-400 animate-spin" />
                     </div>
-                    <div className="bg-white dark:bg-[#0F1724] border border-slate-200 dark:border-white/10 shadow-sm rounded-xl rounded-tl-none p-4 text-slate-600 dark:text-slate-300 flex items-center gap-2">
-                        <span className="font-medium text-sm text-slate-900 dark:text-slate-200">Processing:</span>
-                        <span className="text-sm animate-pulse">{loadingProgress}</span>
+                    <div className="bg-white dark:bg-[#0F1724] border border-slate-200 dark:border-white/10 shadow-sm rounded-xl rounded-tl-none px-4 py-3 flex items-center gap-2.5 overflow-hidden">
+                       {/* Animated dot row */}
+                       <div className="flex gap-1 flex-shrink-0">
+                         {[0,1,2].map(i => (
+                           <motion.div
+                             key={i}
+                             className="w-1.5 h-1.5 rounded-full bg-blue-400 dark:bg-blue-500"
+                             animate={{ y: [0, -4, 0] }}
+                             transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' }}
+                           />
+                         ))}
+                       </div>
+                       {/* Label crossfades on each node completion */}
+                       <AnimatePresence mode="wait">
+                         <motion.span
+                           key={loadingProgress}
+                           initial={{ opacity: 0, x: 6 }}
+                           animate={{ opacity: 1, x: 0 }}
+                           exit={{ opacity: 0, x: -6 }}
+                           transition={{ duration: 0.18, ease: 'easeOut' }}
+                           className="text-sm text-slate-600 dark:text-slate-300"
+                         >
+                           {loadingProgress}
+                         </motion.span>
+                       </AnimatePresence>
                     </div>
                  </div>
-               </div>
+               </motion.div>
             )}
+            </AnimatePresence>
 
                 <div ref={bottomRef} className="h-10"></div>
               </div>
@@ -495,23 +553,46 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Right Panel - Latest Candidates */}
+          {/* Right Panel - Latest Candidates — slides in/out from the right */}
+          <AnimatePresence>
           {activeCandidates && activeCandidates.length > 0 && (
-            <div className="hidden lg:flex w-[26rem] flex-col h-full bg-white dark:bg-[#0C1420] border-l border-slate-200/80 dark:border-white/10 overflow-hidden">
+            <motion.div
+              key="candidate-panel"
+              initial={{ x: 420, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 420, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 32, mass: 0.9 }}
+              className="hidden lg:flex w-[26rem] flex-col h-full bg-white dark:bg-[#0C1420] border-l border-slate-200/80 dark:border-white/10 overflow-hidden flex-shrink-0"
+            >
+               {/* Header with animated count badge */}
                <div className="p-5 border-b border-slate-200/80 dark:border-white/10 bg-white dark:bg-[#0C1420] z-10 flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-2 tracking-tight">
                      <User className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                     Candidates ({activeCandidates.length})
+                     Candidates
+                     {/* Animated count badge */}
+                     <AnimatePresence mode="wait">
+                       <motion.span
+                         key={activeCandidates.length}
+                         initial={{ opacity: 0, scale: 0.7 }}
+                         animate={{ opacity: 1, scale: 1 }}
+                         exit={{ opacity: 0, scale: 0.7 }}
+                         transition={{ duration: 0.2, ease: 'backOut' }}
+                         className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
+                       >
+                         {activeCandidates.length}
+                       </motion.span>
+                     </AnimatePresence>
                      {viewedCandidatesIndex !== null && (
-                        <span className="ml-2 text-[10px] uppercase font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-white/10 px-2 py-0.5 rounded border border-slate-200 dark:border-white/10">Viewing Past</span>
+                        <span className="ml-1 text-[10px] uppercase font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-white/10 px-2 py-0.5 rounded border border-slate-200 dark:border-white/10">Past</span>
                      )}
                   </h2>
                </div>
                <div className="flex-1 overflow-y-auto no-scrollbar p-3">
                   <CandidateList candidates={activeCandidates} />
                </div>
-            </div>
+            </motion.div>
           )}
+          </AnimatePresence>
         </div>
       </div>
     </div>
