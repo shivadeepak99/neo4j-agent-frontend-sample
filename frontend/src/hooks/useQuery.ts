@@ -1,6 +1,78 @@
 import { useState, useCallback, useRef } from 'react';
 import type { Candidate, CandidateReference, ChatMessage, UIMessagePart } from '@/lib/api-types';
 import { API_URL } from '@/lib/api-client';
+import { loadDebugMap, saveDebugInfo } from '@/lib/debugCache';
+
+// ---------------------------------------------------------------------------
+// Debug types — populated from D: SSE events (one per agent turn)
+// ---------------------------------------------------------------------------
+
+export type DebugToolObservation = {
+  ok: boolean;
+  tool: string;
+  toolArgs?: Record<string, unknown>;
+  purpose?: string;
+  rowCount?: number;
+  error?: string;
+  summary?: string;
+  safetyGateCleared?: boolean;
+  latencyMs?: number;
+  rows?: Record<string, unknown>[];
+  result?: unknown;
+  matches?: unknown[];
+};
+
+/** One entry in the live run timeline (node start labels + key milestones). */
+export type DebugStep = {
+  label: string;
+  /** ms since request start when this step was observed. */
+  atMs: number;
+  /** 'node' | 'milestone' | 'tool' — drives the icon/colour in the inspector. */
+  kind: 'node' | 'milestone' | 'tool';
+};
+
+export type DebugInfo = {
+  /** Ordered timeline of node steps + milestones captured from the SSE stream. */
+  steps?: DebugStep[];
+  memory?: {
+    conversationHistory?: Array<{ role: string; content: string }>;
+    continuation?: {
+      lastResultDirIds?: string[];
+      activeFilters?: Record<string, unknown>;
+      [key: string]: unknown;
+    } | null;
+    // Rolling LLM summary of turns that aged out of the verbatim window.
+    conversationSummary?: string | null;
+    turnCount?: number;
+    sessionTokensUsed?: number;
+  };
+  plan?: {
+    path?: string;
+    answerMode?: string;
+    requestedFields?: string[];
+    cypher?: string;
+  };
+  toolObservations?: {
+    observations?: DebugToolObservation[];
+    loopIterations?: number;
+  };
+  repair?: { repairAttempts?: number };
+  executeQuery?: { rowCount?: number; queryError?: string | null };
+  summary?: {
+    nodeLatencies?: Record<string, number>;
+    tokenUsage?: { input: number; output: number } | null;
+    executionPath?: string | null;
+    repairAttempts?: number;
+    nonFatalErrors?: string[];
+    loopIterations?: number;
+  };
+  sessionStatus?: {
+    tokensUsed?: number;
+    softLimit?: number;
+    shouldStartNewConversation?: boolean;
+    message?: string | null;
+  };
+};
 
 export type HistoricalTurn = {
   type: 'user' | 'agent';
@@ -12,7 +84,53 @@ export type HistoricalTurn = {
     question: string;
     options: string[];
   };
+  debugInfo?: DebugInfo;
 };
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function normalizeToolObservation(raw: unknown): DebugToolObservation {
+  const r = asRecord(raw) ?? {};
+  const toolArgs = asRecord(r['toolArgs']);
+  const result = r['result'];
+  const resultRecord = asRecord(result);
+  const rows = Array.isArray(r['rows']) ? r['rows'] as Record<string, unknown>[] : undefined;
+  const matches = Array.isArray(r['matches'])
+    ? r['matches'] as unknown[]
+    : Array.isArray(resultRecord?.['matches'])
+      ? resultRecord['matches'] as unknown[]
+      : undefined;
+  const rowCount = typeof r['rowCount'] === 'number'
+    ? r['rowCount'] as number
+    : rows
+      ? rows.length
+      : matches
+        ? matches.length
+        : undefined;
+  const tool = String(r['tool'] ?? r['toolName'] ?? 'unknown');
+  const ok = typeof r['ok'] === 'boolean'
+    ? r['ok'] as boolean
+    : r['safetyGateCleared'] !== false && !r['error'];
+
+  return {
+    ok,
+    tool,
+    toolArgs,
+    purpose: String(r['purpose'] ?? toolArgs?.['purpose'] ?? resultRecord?.['term'] ?? '').trim() || undefined,
+    rowCount,
+    error: typeof r['error'] === 'string' ? r['error'] as string : undefined,
+    summary: typeof r['summary'] === 'string' ? r['summary'] as string : undefined,
+    safetyGateCleared: typeof r['safetyGateCleared'] === 'boolean' ? r['safetyGateCleared'] as boolean : undefined,
+    latencyMs: typeof r['latencyMs'] === 'number' ? r['latencyMs'] as number : undefined,
+    rows,
+    result,
+    matches,
+  };
+}
 
 function textFromParts(parts: UIMessagePart[] = []) {
   return parts
@@ -40,7 +158,10 @@ function candidatesFromToolOutput(output: UIMessagePart['output']): Candidate[] 
   }));
 }
 
-function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
+function historyFromMessages(messages: ChatMessage[], sessionId?: string): HistoricalTurn[] {
+  // Re-attach debug info cached in the browser (test-only) so the debug panels
+  // repopulate after a reload / session switch. Server messages carry no debug.
+  const debugMap = sessionId ? loadDebugMap(sessionId) : {};
   const turns: HistoricalTurn[] = [];
   for (const message of messages) {
     const text = textFromParts(message.parts);
@@ -56,6 +177,7 @@ function historyFromMessages(messages: ChatMessage[]): HistoricalTurn[] {
       text: text || 'Search finished',
       messageId: message.id,
       candidates: candidates.length > 0 ? candidates : undefined,
+      debugInfo: message.id ? debugMap[message.id] : undefined,
     });
   }
   console.log('[history] hydrated turns', {
@@ -87,6 +209,9 @@ export function useQuery(accessToken: string | null) {
   const [conversationHistory, setConversationHistory] = useState<HistoricalTurn[]>([]); 
   const activeAgentIndexRef = useRef<number | null>(null);
   const activeMessageIdRef = useRef<string | null>(null);
+  // Accumulates this turn's debugInfo across D: events so we can persist it to
+  // localStorage on completion (test-only — survives reloads/session switches).
+  const activeDebugRef = useRef<DebugInfo | null>(null);
   
   const [lastQuery, setLastQuery] = useState<string | null>(null);
 
@@ -101,8 +226,8 @@ export function useQuery(accessToken: string | null) {
       setConversationHistory(turns);
   }, []);
 
-  const setInitialHistoryFromMessages = useCallback((messages: ChatMessage[]) => {
-      setConversationHistory(historyFromMessages(messages));
+  const setInitialHistoryFromMessages = useCallback((messages: ChatMessage[], sessionId?: string) => {
+      setConversationHistory(historyFromMessages(messages, sessionId));
   }, []);
 
   const sendQuery = useCallback(async (query: string, sessionId: string, clarificationAnswer?: string) => {
@@ -116,6 +241,7 @@ export function useQuery(accessToken: string | null) {
     }
 
     activeAgentIndexRef.current = null;
+    activeDebugRef.current = null;
     setLoading(true);
     setLoadingProgress('Connecting to search...');
     setLastQuery(clarificationAnswer ? lastQuery : query);
@@ -226,12 +352,30 @@ export function useQuery(accessToken: string | null) {
         const event = parseUiStreamPayload(dataStr);
         if (!event) return;
 
+        // Append a step to the live run timeline and persist it onto the message's
+        // debugInfo (so the inspector shows a full, ordered log of what happened).
+        const recordStep = (label: string, kind: DebugStep['kind'] = 'node') => {
+          if (!label) return;
+          ensureAgentMessage();
+          const debug: DebugInfo = { ...(activeDebugRef.current ?? {}) };
+          const steps = Array.isArray(debug.steps) ? [...debug.steps] : [];
+          const last = steps[steps.length - 1];
+          if (last && last.label === label && last.kind === kind) return; // dedup consecutive
+          steps.push({ label, atMs: Number(elapsed) || 0, kind });
+          debug.steps = steps;
+          activeDebugRef.current = debug;
+          updateAgentMessage((current) => ({ ...current, debugInfo: debug }));
+        };
+
         if (event.prefix === 'p') {
           // Real-time progress label emitted by each LangGraph node as it starts.
           // Arrives while the agent is still running — update the loading status
           // without touching the message bubble.
           const label = typeof event.value?.label === 'string' ? event.value.label : null;
-          if (label) setLoadingProgress(label);
+          if (label) {
+            setLoadingProgress(label);
+            recordStep(label, 'node');
+          }
           return;
         }
 
@@ -244,6 +388,7 @@ export function useQuery(accessToken: string | null) {
           // Set a generic label so the user sees something right away.
           // The backend's `p:` node events will replace this as each node completes.
           setLoadingProgress('Processing query...');
+          recordStep('Stream connected', 'milestone');
           return;
         }
 
@@ -262,6 +407,7 @@ export function useQuery(accessToken: string | null) {
           // Tool call event — just log. The real progress label already came via `p:`.
           const toolName = event.value?.toolName as string | undefined;
           console.log(`[useQuery] 🛠️ Tool call (${toolName || 'search'}): ${elapsed}ms`);
+          if (toolName) recordStep(`Tool call · ${toolName}`, 'tool');
           // Do NOT override loadingProgress here — backend `p:` events carry the
           // correct per-node label (e.g. "Searching candidate database...").
           return;
@@ -276,6 +422,7 @@ export function useQuery(accessToken: string | null) {
             // Show count as a supplemental label — the `p:` from `narrate` node
             // will replace this with "Writing answer..." when narration starts.
             setLoadingProgress(`Found ${found.length} candidate${found.length !== 1 ? 's' : ''}...`);
+            recordStep(`Received ${found.length} candidate${found.length !== 1 ? 's' : ''}`, 'milestone');
             ensureAgentMessage();
             updateAgentMessage(current => ({ ...current, candidates: found }));
           }
@@ -290,6 +437,7 @@ export function useQuery(accessToken: string | null) {
             // narrate's `p:` already set "Writing answer..." — clear spinner label
             // now that actual text is arriving.
             setLoadingProgress(null);
+            recordStep('Answer streaming', 'milestone');
           }
           streamedText += delta;
           ensureAgentMessage();
@@ -304,6 +452,83 @@ export function useQuery(accessToken: string | null) {
         if (event.prefix === 'e' || event.prefix === 'd') {
           console.log(`[useQuery] ✅ Stream complete / Step finish: ${elapsed}ms`);
           setLoadingProgress(null);
+          return;
+        }
+
+        // D: debug events — one per significant node, accumulate into debugInfo
+        if (event.prefix === 'D') {
+          const debugEvent = event.value as Record<string, unknown>;
+          const type = String(debugEvent['type'] ?? '');
+          ensureAgentMessage();
+          // Accumulate into the ref (source of truth for persistence), then mirror
+          // it onto the message. Using the ref instead of current.debugInfo means
+          // the finalize step can save the complete object to localStorage.
+          const debug: DebugInfo = { ...(activeDebugRef.current ?? {}) };
+          {
+            switch (type) {
+              case 'memory': {
+                type MemoryType = NonNullable<DebugInfo['memory']>;
+                debug.memory = {
+                  conversationHistory: debugEvent['conversationHistory'] as MemoryType['conversationHistory'],
+                  continuation:        debugEvent['continuation'] as MemoryType['continuation'],
+                  conversationSummary: debugEvent['conversationSummary'] as string | null | undefined,
+                  turnCount:           debugEvent['turnCount'] as number | undefined,
+                  sessionTokensUsed:   debugEvent['sessionTokensUsed'] as number | undefined,
+                };
+                break;
+              }
+              case 'plan':
+                debug.plan = {
+                  path:            debugEvent['path'] as string | undefined,
+                  answerMode:      debugEvent['answerMode'] as string | undefined,
+                  requestedFields: debugEvent['requestedFields'] as string[] | undefined,
+                  cypher:          debugEvent['cypher'] as string | undefined,
+                };
+                break;
+              case 'toolObservations':
+                {
+                  const incoming = Array.isArray(debugEvent['observations'])
+                    ? (debugEvent['observations'] as unknown[]).map(normalizeToolObservation)
+                    : [];
+                  const existing = debug.toolObservations?.observations ?? [];
+                  const nextLoopIterations = debugEvent['loopIterations'] as number | undefined;
+                  debug.toolObservations = {
+                    observations: [
+                      ...existing,
+                      ...incoming,
+                    ],
+                    loopIterations: Math.max(
+                      debug.toolObservations?.loopIterations ?? 0,
+                      typeof nextLoopIterations === 'number' ? nextLoopIterations : 0,
+                    ),
+                  };
+                }
+                break;
+              case 'repair':
+                debug.repair = { repairAttempts: debugEvent['repairAttempts'] as number | undefined };
+                break;
+              case 'executeQuery':
+                debug.executeQuery = {
+                  rowCount:   debugEvent['rowCount'] as number | undefined,
+                  queryError: debugEvent['queryError'] as string | null | undefined,
+                };
+                break;
+              case 'summary':
+                debug.summary = debugEvent as unknown as DebugInfo['summary'];
+                break;
+              case 'sessionStatus':
+                debug.sessionStatus = {
+                  tokensUsed:                 debugEvent['tokensUsed'] as number | undefined,
+                  softLimit:                  debugEvent['softLimit'] as number | undefined,
+                  shouldStartNewConversation: debugEvent['shouldStartNewConversation'] as boolean | undefined,
+                  message:                    debugEvent['message'] as string | null | undefined,
+                };
+                break;
+            }
+          }
+          activeDebugRef.current = debug;
+          updateAgentMessage(current => ({ ...current, debugInfo: debug }));
+          return;
         }
       };
 
@@ -339,6 +564,11 @@ export function useQuery(accessToken: string | null) {
       const _finalMessageId = activeMessageIdRef.current;
       activeAgentIndexRef.current = null;
       activeMessageIdRef.current = null;
+      // Persist this turn's debug info to the browser (test-only) so it survives
+      // a reload or session switch — the server history carries no debug data.
+      if (_finalMessageId && activeDebugRef.current) {
+        saveDebugInfo(sessionId, _finalMessageId, activeDebugRef.current);
+      }
       setConversationHistory(prev => {
         const finalIndexById = _finalMessageId
           ? prev.findIndex(turn => turn.type === 'agent' && turn.messageId === _finalMessageId)

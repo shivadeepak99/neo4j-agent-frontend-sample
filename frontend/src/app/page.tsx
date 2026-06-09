@@ -11,16 +11,28 @@ import type { ChatMessage } from "@/lib/api-types";
 import {
   MessageSquare, Plus, Menu, X, HelpCircle, ChevronRight, Building,
   Trash2, User, Loader2, LogIn, LogOut, AlertCircle, Anchor, Sparkles,
-  Users, Moon, Sun,
+  Users, Moon, Sun, Bug, Clock, Zap, Cpu,
 } from "lucide-react";
+import { DebugPanel } from "@/components/DebugPanel";
+import type { DebugSections } from "@/components/DebugPanel";
+import { ContextMeter } from "@/components/ContextMeter";
+import { clearDebugCache } from "@/lib/debugCache";
+
+type RightTab = "candidates" | "inspector";
 
 export default function Dashboard() {
   const { session, user, orgName, loading: authLoading, authError, accessToken, signIn, signOut } = useSupabaseAuth();
   const { sessions, currentSessionId, createSession, loadSession, loadSessionsList, deleteSession } = useSessions(accessToken);
   const { conversationHistory, loading, loadingProgress, sendQuery, lastQuery, resetQueryState, setInitialHistoryFromMessages } = useQuery(accessToken);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [viewedCandidatesIndex, setViewedCandidatesIndex] = useState<number | null>(null);
+  const [debugMode, setDebugMode] = useState(true); // ON by default
+  const [rightTab, setRightTab] = useState<RightTab>("candidates");
+  const [viewedTurnIndex, setViewedTurnIndex] = useState<number | null>(null);
+  const [debugSections, setDebugSections] = useState<DebugSections>({
+    steps: true, plan: true, tools: true, memory: true, perf: true,
+  });
   const [email, setEmail] = useState("org1@gmail.com");
   const [password, setPassword] = useState("");
   const [signingIn, setSigningIn] = useState(false);
@@ -43,15 +55,26 @@ export default function Dashboard() {
 
   const loadSessionHistory = async (sessionId: string, cachedMessages?: ChatMessage[] | null) => {
     resetQueryState();
-    if (cachedMessages && cachedMessages.length > 0) setInitialHistoryFromMessages(cachedMessages);
+    setViewedTurnIndex(null);
+    if (cachedMessages && cachedMessages.length > 0) setInitialHistoryFromMessages(cachedMessages, sessionId);
     const sessionDetails = await loadSession(sessionId);
     if (sessionDetails?.messages) {
-      setInitialHistoryFromMessages(sessionDetails.messages);
+      setInitialHistoryFromMessages(sessionDetails.messages, sessionId);
       writeCachedMessages(sessionId, sessionDetails.messages);
     }
   };
 
-  // ─── Init ─────────────────────────────────────────────────────────────────
+  // ─── Init / persisted prefs ────────────────────────────────────────────────
+  useEffect(() => {
+    try {
+      const dbg = localStorage.getItem("pref:debug");
+      if (dbg !== null) setDebugMode(dbg === "1");
+      const thm = localStorage.getItem("pref:theme");
+      if (thm) setIsDarkMode(thm === "dark");
+    } catch { /* ignore */ }
+    document.documentElement.classList.add("dark");
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       if (!accessToken) return;
@@ -62,14 +85,16 @@ export default function Dashboard() {
       }
     };
     init();
-    document.documentElement.classList.add("dark");
   }, [accessToken]);
 
   useEffect(() => {
-    isDarkMode
-      ? document.documentElement.classList.add("dark")
-      : document.documentElement.classList.remove("dark");
+    document.documentElement.classList.toggle("dark", isDarkMode);
+    try { localStorage.setItem("pref:theme", isDarkMode ? "dark" : "light"); } catch { /* ignore */ }
   }, [isDarkMode]);
+
+  useEffect(() => {
+    try { localStorage.setItem("pref:debug", debugMode ? "1" : "0"); } catch { /* ignore */ }
+  }, [debugMode]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -78,7 +103,7 @@ export default function Dashboard() {
   // ─── Actions ──────────────────────────────────────────────────────────────
   const handleSearch = async (query: string) => {
     if (!accessToken) return;
-    setViewedCandidatesIndex(null);
+    setViewedTurnIndex(null);
     let activeSessionId = currentSessionId;
     if (activeSessionId === "default") activeSessionId = await createSession(query.substring(0, 30));
     sendQuery(query, activeSessionId);
@@ -97,6 +122,7 @@ export default function Dashboard() {
   const handleDeleteSession = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
     await deleteSession(sessionId);
+    clearDebugCache(sessionId);
     if (currentSessionId === sessionId) resetQueryState();
   };
 
@@ -110,11 +136,26 @@ export default function Dashboard() {
 
   const handleSignOut = async () => { await signOut(); resetQueryState(); };
 
+  const openInspector = (i: number) => { setViewedTurnIndex(i); setRightTab("inspector"); };
+  const openCandidates = (i: number) => { setViewedTurnIndex(i); setRightTab("candidates"); };
+
   // ─── Derived ──────────────────────────────────────────────────────────────
+  const latestAgentIdx = (() => {
+    for (let i = conversationHistory.length - 1; i >= 0; i--) if (conversationHistory[i]?.type === "agent") return i;
+    return -1;
+  })();
+  const selectedIdx = viewedTurnIndex ?? (latestAgentIdx >= 0 ? latestAgentIdx : null);
+
   const latestCandidates = conversationHistory.slice().reverse().find((m) => m.candidates && m.candidates.length > 0)?.candidates;
-  const activeCandidates = viewedCandidatesIndex !== null
-    ? conversationHistory[viewedCandidatesIndex]?.candidates
-    : latestCandidates;
+  const activeCandidates = selectedIdx != null ? (conversationHistory[selectedIdx]?.candidates ?? latestCandidates) : latestCandidates;
+  const activeDebug = selectedIdx != null ? conversationHistory[selectedIdx]?.debugInfo : undefined;
+
+  const hasCandidates = !!activeCandidates && activeCandidates.length > 0;
+  const hasDebug = debugMode && !!activeDebug;
+  const dockOpen = hasCandidates || hasDebug;
+
+  const latestSessionStatus = conversationHistory.slice().reverse()
+    .find((m) => m.type === "agent" && m.debugInfo?.sessionStatus)?.debugInfo?.sessionStatus;
 
   const formatAgentText = (text: string) =>
     text.split("\n").map((line, i) => {
@@ -123,9 +164,7 @@ export default function Dashboard() {
       return (
         <span key={i} className="block mb-1">
           {parts.map((part, j) =>
-            j % 2 === 1
-              ? <strong key={j} className="font-semibold text-white">{part}</strong>
-              : part
+            j % 2 === 1 ? <strong key={j} className="font-semibold text-[var(--fg)]">{part}</strong> : part
           )}
         </span>
       );
@@ -133,76 +172,58 @@ export default function Dashboard() {
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen overflow-hidden relative bg-[#02060F] text-white">
+    <div className="flex h-screen overflow-hidden relative bg-[var(--app-bg)] text-[var(--fg)]">
 
-      {/* ── Animated nebula background ─────────────────────────────────────── */}
+      {/* ── Aurora background ─────────────────────────────────────────────── */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {/* Dot grid texture */}
         <div className="absolute inset-0 dot-grid opacity-40" />
-        {/* Nebula blobs */}
-        <div className="nebula-a absolute -top-40 -left-40 w-[700px] h-[700px] rounded-full bg-[radial-gradient(circle,rgba(99,102,241,0.12)_0%,transparent_70%)]" />
-        <div className="nebula-b absolute -bottom-60 -right-20 w-[600px] h-[600px] rounded-full bg-[radial-gradient(circle,rgba(139,92,246,0.10)_0%,transparent_70%)]" />
-        <div className="nebula-c absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[500px] rounded-full bg-[radial-gradient(circle,rgba(56,189,248,0.04)_0%,transparent_70%)]" />
+        <div className="aurora-a absolute -top-40 -left-40 w-[680px] h-[680px] rounded-full" style={{ background: "radial-gradient(circle, var(--aurora-1) 0%, transparent 70%)" }} />
+        <div className="aurora-b absolute -bottom-56 -right-24 w-[600px] h-[600px] rounded-full" style={{ background: "radial-gradient(circle, var(--aurora-2) 0%, transparent 70%)" }} />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[480px] rounded-full" style={{ background: "radial-gradient(circle, var(--aurora-3) 0%, transparent 70%)" }} />
       </div>
 
       {/* ── Mobile overlay ────────────────────────────────────────────────── */}
       {isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden"
-          onClick={() => setIsSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />
       )}
 
       {/* ═══ SIDEBAR ══════════════════════════════════════════════════════════ */}
-      <div className={`
-        fixed inset-y-0 left-0 z-50 w-64 flex flex-col
-        bg-[rgba(7,17,31,0.95)] backdrop-blur-xl
-        border-r border-[rgba(99,130,220,0.1)]
-        transform transition-all duration-300 ease-in-out
+      <aside className={`
+        fixed inset-y-0 left-0 z-50 w-[260px] flex flex-col glass
+        transform transition-transform duration-300 ease-out
         md:relative md:translate-x-0
         ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"}
       `}>
-        {/* Sidebar glow edge */}
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-px bg-gradient-to-b from-transparent via-[rgba(99,102,241,0.3)] to-transparent" />
-
-        {/* Sidebar header */}
-        <div className="p-4 border-b border-[rgba(99,130,220,0.1)] flex items-center gap-2">
-          {/* Logo mark */}
-          <div className="w-8 h-8 flex-shrink-0 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
-            <Anchor className="w-4 h-4 text-white" />
+        <div className="p-4 flex items-center gap-2.5 border-b border-[var(--line)]">
+          <div className="w-9 h-9 shrink-0 rounded-xl btn-brand grid place-items-center">
+            <Anchor className="w-4.5 h-4.5 text-white" />
           </div>
-          <span className="font-semibold text-sm text-white tracking-tight flex-1">MFA Search</span>
-          <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 text-[#7A92B8] hover:text-[#C5D3F0] rounded-md md:hidden transition-colors">
+          <div className="flex-1 min-w-0">
+            <p className="font-display font-bold text-[15px] leading-none">MFA Search</p>
+            <p className="text-[11px] text-[var(--fg-faint)] mt-1">Maritime Crew Intelligence</p>
+          </div>
+          <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 text-[var(--fg-faint)] hover:text-[var(--fg)] rounded-md md:hidden">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* New Session button */}
         <div className="p-3">
           <motion.button
             suppressHydrationWarning
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
             onClick={() => {
-              loadSession("default");
-              resetQueryState();
+              loadSession("default"); resetQueryState(); setViewedTurnIndex(null);
               if (window.innerWidth < 768) setIsSidebarOpen(false);
             }}
-            className="relative w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-sm font-semibold text-white overflow-hidden group transition-all"
+            className="btn-brand w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-[13.5px] font-semibold"
           >
-            <span className="absolute inset-0 bg-gradient-to-r from-indigo-600 to-violet-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-            <span className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity">
-              <span className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-violet-500" />
-            </span>
-            {/* Top highlight */}
-            <span className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-            <Plus className="w-4 h-4 relative z-10" />
-            <span className="relative z-10 whitespace-nowrap">New Session</span>
+            <Plus className="w-4 h-4" /> New Session
           </motion.button>
         </div>
 
-        {/* Sessions list */}
         <div className="flex-1 overflow-y-auto no-scrollbar px-3 pb-3 space-y-1">
+          <p className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--fg-faint)]">Sessions</p>
           {sessions.map((sess) => (
             <div key={sess.sessionId} className="relative group">
               <button
@@ -211,211 +232,189 @@ export default function Dashboard() {
                   await loadSessionHistory(sess.sessionId, readCachedMessages(sess.sessionId));
                   if (window.innerWidth < 768) setIsSidebarOpen(false);
                 }}
-                className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-2.5 transition-all duration-200 text-sm ${
+                className={`w-full text-left px-3 py-2.5 rounded-xl flex items-center gap-2.5 transition-colors text-[13.5px] ${
                   currentSessionId === sess.sessionId
-                    ? "bg-[rgba(99,102,241,0.15)] text-[#C7D2FE] border border-[rgba(99,102,241,0.25)]"
-                    : "text-[#C5D3F0] hover:bg-[rgba(255,255,255,0.04)] hover:text-[#A8B5D0] border border-transparent"
+                    ? "bg-[var(--brand-soft)] text-[var(--fg)] border border-[var(--brand-line)]"
+                    : "text-[var(--fg-dim)] hover:bg-[var(--panel-2)] border border-transparent"
                 }`}
               >
-                <MessageSquare className={`w-3.5 h-3.5 flex-shrink-0 ${currentSessionId === sess.sessionId ? "text-indigo-400" : "text-[#7A92B8]"}`} />
+                <MessageSquare className={`w-4 h-4 shrink-0 ${currentSessionId === sess.sessionId ? "text-[var(--brand)]" : "text-[var(--fg-faint)]"}`} />
                 <span className="truncate font-medium">{sess.title}</span>
               </button>
               {sess.sessionId !== "default" && (
                 <button
                   onClick={(e) => handleDeleteSession(e, sess.sessionId)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-[#7A92B8] hover:text-rose-400 hover:bg-[rgba(244,63,94,0.1)] rounded-md opacity-0 group-hover:opacity-100 transition-all"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-[var(--fg-faint)] hover:text-[var(--bad)] hover:bg-[var(--bad-soft)] rounded-md opacity-0 group-hover:opacity-100 transition-all"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           ))}
         </div>
 
-        {/* Sidebar footer */}
-        <div className="p-3 border-t border-[rgba(99,130,220,0.1)]">
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
-              <Building className="w-3.5 h-3.5 text-white" />
+        <div className="p-3 border-t border-[var(--line)]">
+          <div className="flex items-center gap-2.5 px-2 py-1.5">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-500 to-indigo-600 grid place-items-center shrink-0">
+              <Building className="w-4 h-4 text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-semibold text-[#A8B5D0] truncate">{user?.email || "Not signed in"}</p>
-              {orgName && <p className="text-[10px] text-[#7A92B8] truncate">{orgName}</p>}
+              <p className="text-[12px] font-semibold text-[var(--fg-dim)] truncate">{user?.email || "Not signed in"}</p>
+              {orgName && <p className="text-[11px] text-[var(--fg-faint)] truncate">{orgName}</p>}
             </div>
           </div>
         </div>
-      </div>
+      </aside>
 
-      {/* ═══ MAIN CONTENT ═════════════════════════════════════════════════════ */}
+      {/* ═══ MAIN ═════════════════════════════════════════════════════════════ */}
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
-        <header className="relative flex-shrink-0 z-10 border-b border-[rgba(99,130,220,0.1)] bg-[rgba(7,17,31,0.8)] backdrop-blur-xl">
-          {/* Bottom glow line */}
-          <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[rgba(99,102,241,0.4)] to-transparent" />
-
-          <div className="px-4 py-3.5 flex items-center justify-between gap-3">
+        <header className="relative shrink-0 z-10 glass border-b border-[var(--line)]">
+          <div className="px-4 py-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setIsSidebarOpen(true)}
-                className="md:hidden p-2 text-[#7A92B8] hover:text-[#C5D3F0] hover:bg-[rgba(255,255,255,0.05)] rounded-lg transition-all"
-              >
+              <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-[var(--fg-faint)] hover:text-[var(--fg)] rounded-lg">
                 <Menu className="w-5 h-5" />
               </button>
-
               <div className="flex items-center gap-2.5">
-                {/* Glowing icon */}
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
-                  <Sparkles className="w-4 h-4 text-white" />
+                <div className="w-9 h-9 rounded-xl btn-brand grid place-items-center">
+                  <Sparkles className="w-4.5 h-4.5 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-[15px] font-semibold tracking-tight text-white leading-none">
-                    Candidate Search
-                  </h1>
-                  <p className="text-[10px] text-[#7A92B8] font-medium mt-0.5">Maritime Intelligence</p>
+                  <h1 className="font-display text-[16px] font-bold leading-none">Candidate Search</h1>
+                  <p className="text-[11px] text-[var(--fg-faint)] mt-1">Natural language → Neo4j, fully traced</p>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              {/* Theme toggle */}
+            <div className="flex items-center gap-1.5">
               <button
                 suppressHydrationWarning
                 onClick={() => setIsDarkMode(!isDarkMode)}
-                className="p-2 text-[#7A92B8] hover:text-[#C5D3F0] hover:bg-[rgba(255,255,255,0.05)] rounded-lg transition-all"
+                title="Toggle theme"
+                className="p-2 text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--panel-2)] rounded-lg transition-colors"
               >
-                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                {isDarkMode ? <Sun className="w-4.5 h-4.5" /> : <Moon className="w-4.5 h-4.5" />}
+              </button>
+              <button
+                suppressHydrationWarning
+                onClick={() => setDebugMode(!debugMode)}
+                title="Toggle agent inspector"
+                className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[12px] font-semibold transition-colors ${
+                  debugMode
+                    ? "text-[var(--brand)] bg-[var(--brand-soft)] border border-[var(--brand-line)]"
+                    : "text-[var(--fg-faint)] hover:text-[var(--fg)] hover:bg-[var(--panel-2)] border border-transparent"
+                }`}
+              >
+                <Bug className="w-4 h-4" /> <span className="hidden sm:inline">Inspector</span>
               </button>
 
-              <div className="h-5 w-px bg-[rgba(99,130,220,0.15)]" />
+              <div className="h-5 w-px bg-[var(--line-strong)] mx-1" />
 
-              {/* User chip */}
               {session && (
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[rgba(255,255,255,0.04)] border border-[rgba(99,130,220,0.1)]">
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
-                    <User className="w-3 h-3 text-white" />
-                  </div>
-                  <span className="hidden sm:block text-[12px] font-medium text-[#A8B5D0] max-w-[140px] truncate">
-                    {user?.email}
-                  </span>
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg surface-2">
+                  <div className="w-6 h-6 rounded-full btn-brand grid place-items-center"><User className="w-3 h-3 text-white" /></div>
+                  <span className="hidden sm:block text-[12.5px] font-medium text-[var(--fg-dim)] max-w-[150px] truncate">{user?.email}</span>
                 </div>
               )}
-
               {session && (
-                <button
-                  onClick={handleSignOut}
-                  title="Sign out"
-                  className="p-2 text-[#7A92B8] hover:text-rose-400 hover:bg-[rgba(244,63,94,0.08)] rounded-lg transition-all"
-                >
-                  <LogOut className="w-4 h-4" />
+                <button onClick={handleSignOut} title="Sign out" className="p-2 text-[var(--fg-faint)] hover:text-[var(--bad)] hover:bg-[var(--bad-soft)] rounded-lg transition-colors">
+                  <LogOut className="w-4.5 h-4.5" />
                 </button>
               )}
             </div>
           </div>
+
+          {/* Inspector section toggles */}
+          <AnimatePresence>
+            {debugMode && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.18 }} className="overflow-hidden"
+              >
+                <div className="px-4 py-1.5 flex items-center gap-2 bg-[var(--brand-soft)] border-t border-[var(--line)]">
+                  <Bug className="w-3.5 h-3.5 text-[var(--brand)] shrink-0" />
+                  <span className="text-[10px] uppercase tracking-wider text-[var(--fg-faint)] font-bold mr-1">sections:</span>
+                  {(["steps", "plan", "tools", "memory", "perf"] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setDebugSections((prev) => ({ ...prev, [s]: !prev[s] }))}
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-semibold capitalize transition-colors ${
+                        debugSections[s]
+                          ? "bg-[var(--brand-soft)] text-[var(--brand)] border border-[var(--brand-line)]"
+                          : "text-[var(--fg-faint)] hover:text-[var(--fg-dim)] border border-transparent"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </header>
 
-        {/* ── Body: chat + right panel ────────────────────────────────────── */}
+        {/* ── Body: chat + right dock ─────────────────────────────────────── */}
         <div className="flex-1 flex overflow-hidden">
 
           {/* Chat column */}
           <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-            <main className="flex-1 overflow-y-auto no-scrollbar px-4 md:px-8 pt-6 pb-36">
+            <main className="flex-1 overflow-y-auto no-scrollbar px-4 md:px-8 pt-6 pb-40">
               <div className="max-w-3xl mx-auto">
 
-                {/* ── Sign-in card ─────────────────────────────────────────── */}
+                {/* Sign-in */}
                 {!session && !authLoading && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.45, ease: "easeOut" }}
-                    className="mb-8 mt-8 max-w-sm mx-auto"
-                  >
-                    <div className="relative rounded-2xl overflow-hidden">
-                      {/* Gradient border */}
-                      <div className="absolute inset-0 rounded-2xl p-px bg-gradient-to-br from-indigo-500/40 via-violet-500/20 to-sky-500/30">
-                        <div className="w-full h-full rounded-2xl bg-[#07111F]" />
-                      </div>
-                      <div className="relative p-6">
-                        {/* Header */}
-                        <div className="flex items-center gap-3 mb-5">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
-                            <LogIn className="w-5 h-5 text-white" />
-                          </div>
-                          <div>
-                            <h2 className="font-semibold text-white text-[15px]">Welcome back</h2>
-                            <p className="text-[11px] text-[#7A92B8]">Sign in to your organisation</p>
-                          </div>
+                  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }} className="mb-8 mt-8 max-w-sm mx-auto">
+                    <div className="rounded-2xl elevated p-6">
+                      <div className="flex items-center gap-3 mb-5">
+                        <div className="w-11 h-11 rounded-xl btn-brand grid place-items-center"><LogIn className="w-5 h-5 text-white" /></div>
+                        <div>
+                          <h2 className="font-display font-bold text-[16px]">Welcome back</h2>
+                          <p className="text-[12px] text-[var(--fg-faint)]">Sign in to your organisation</p>
                         </div>
-
-                        <form onSubmit={handleSignIn} className="space-y-3">
-                          {[
-                            { type: "email",    value: email,    onChange: (v: string) => setEmail(v),    placeholder: "Email address" },
-                            { type: "password", value: password, onChange: (v: string) => setPassword(v), placeholder: "Password" },
-                          ].map((field) => (
-                            <div key={field.type} className="relative">
-                              <input
-                                type={field.type}
-                                value={field.value}
-                                onChange={(e) => field.onChange(e.target.value)}
-                                placeholder={field.placeholder}
-                                className="w-full rounded-xl border border-[rgba(99,130,220,0.15)] bg-[rgba(255,255,255,0.04)] px-4 py-2.5 text-sm text-white placeholder:text-[#9BB4D6] outline-none focus:border-[rgba(99,102,241,0.5)] focus:bg-[rgba(99,102,241,0.05)] transition-all"
-                              />
-                            </div>
-                          ))}
-
-                          {authError && (
-                            <div className="flex gap-2 rounded-xl border border-[rgba(244,63,94,0.2)] bg-[rgba(244,63,94,0.08)] p-3 text-xs text-rose-300">
-                              <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
-                              <span>{authError}</span>
-                            </div>
-                          )}
-
-                          <motion.button
-                            type="submit"
-                            disabled={signingIn || authLoading || !email || !password}
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.97 }}
-                            className="relative w-full rounded-xl py-2.5 text-sm font-semibold text-white overflow-hidden disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
-                          >
-                            <span className="absolute inset-0 bg-gradient-to-r from-indigo-600 to-violet-600" />
-                            <span className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
-                            <span className="relative z-10 flex items-center gap-2">
-                              {signingIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
-                              {signingIn ? "Signing in…" : "Sign in"}
-                            </span>
-                          </motion.button>
-                        </form>
                       </div>
+                      <form onSubmit={handleSignIn} className="space-y-3">
+                        {[
+                          { type: "email", value: email, onChange: setEmail, placeholder: "Email address" },
+                          { type: "password", value: password, onChange: setPassword, placeholder: "Password" },
+                        ].map((field) => (
+                          <input
+                            key={field.type}
+                            type={field.type}
+                            value={field.value}
+                            onChange={(e) => field.onChange(e.target.value)}
+                            placeholder={field.placeholder}
+                            className="focus-ring w-full rounded-xl surface-2 px-4 py-2.5 text-[14px] text-[var(--fg)] placeholder:text-[var(--fg-faint)] outline-none transition-shadow"
+                          />
+                        ))}
+                        {authError && (
+                          <div className="flex gap-2 rounded-xl border border-[var(--bad-soft)] bg-[var(--bad-soft)] p-3 text-[12.5px] text-[var(--bad)]">
+                            <AlertCircle className="w-4 h-4 shrink-0" /><span>{authError}</span>
+                          </div>
+                        )}
+                        <motion.button
+                          type="submit" disabled={signingIn || authLoading || !email || !password}
+                          whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                          className="btn-brand w-full rounded-xl py-2.5 text-[14px] font-semibold flex items-center justify-center gap-2"
+                        >
+                          {signingIn ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                          {signingIn ? "Signing in…" : "Sign in"}
+                        </motion.button>
+                      </form>
                     </div>
                   </motion.div>
                 )}
 
-                {/* ── Empty state ──────────────────────────────────────────── */}
+                {/* Empty state */}
                 {conversationHistory.length === 0 && !loading && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, ease: "easeOut" }}
-                    className={`mb-8 text-center mt-8 ${!session ? "opacity-30 pointer-events-none" : ""}`}
-                  >
-                    {/* Hero icon */}
+                  <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className={`mb-8 text-center mt-10 ${!session ? "opacity-40 pointer-events-none" : ""}`}>
                     <div className="relative inline-flex mx-auto mb-6">
-                      <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-600/20 border border-[rgba(99,102,241,0.2)] flex items-center justify-center backdrop-blur-sm">
-                        <Anchor className="w-9 h-9 text-indigo-400" />
-                      </div>
-                      {/* Glow rings */}
-                      <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500/10 to-violet-500/10 blur-xl" />
+                      <div className="w-20 h-20 rounded-2xl surface grid place-items-center"><Anchor className="w-9 h-9 text-[var(--brand)]" /></div>
                     </div>
-
-                    <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2 tracking-tight">
-                      Candidate Search Workspace
-                    </h2>
-                    <p className="text-[#C5D3F0] max-w-lg mx-auto text-sm mb-8 leading-relaxed">
-                      Use natural language to find maritime crew by role, vessel experience,
-                      availability, or compliance status.
+                    <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2 text-gradient">Candidate Search Workspace</h2>
+                    <p className="text-[var(--fg-dim)] max-w-lg mx-auto text-[14px] mb-8 leading-relaxed">
+                      Ask in plain English. Every run is fully traced — open the Inspector to see the plan, Cypher, tool calls, results, and timings.
                     </p>
-
-                    {/* Sample query chips */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl mx-auto text-left">
                       {[
                         "Find a Master with VLCC experience available next month",
@@ -423,101 +422,45 @@ export default function Dashboard() {
                         "Engineers with LNG experience and valid STCW",
                         "Filipino masters available ASAP with DP cert",
                       ].map((q, i) => (
-                        <div
-                          key={i}
-                          className="group relative rounded-xl overflow-hidden cursor-pointer"
-                          onClick={() => session && handleSearch(q)}
-                        >
-                          <div className="absolute inset-0 bg-gradient-to-br from-[rgba(99,102,241,0.08)] to-[rgba(139,92,246,0.05)] opacity-0 group-hover:opacity-100 transition-opacity" />
-                          <div className="relative p-3.5 bg-[rgba(255,255,255,0.03)] border border-[rgba(99,130,220,0.1)] rounded-xl group-hover:border-[rgba(99,102,241,0.3)] transition-all">
-                            <ChevronRight className="w-3 h-3 text-indigo-500 mb-1.5 opacity-60 group-hover:opacity-100 transition-opacity" />
-                            <p className="text-[12px] text-[#C5D3F0] group-hover:text-[#A8B5D0] transition-colors leading-relaxed">"{q}"</p>
-                          </div>
-                        </div>
+                        <button key={i} onClick={() => session && handleSearch(q)} className="group surface hover:border-[var(--brand-line)] rounded-xl p-3.5 text-left transition-colors">
+                          <ChevronRight className="w-3.5 h-3.5 text-[var(--brand)] mb-1.5 opacity-70 group-hover:opacity-100 transition-opacity" />
+                          <p className="text-[13px] text-[var(--fg-dim)] leading-relaxed">&ldquo;{q}&rdquo;</p>
+                        </button>
                       ))}
                     </div>
                   </motion.div>
                 )}
 
-                {/* ── Conversation ─────────────────────────────────────────── */}
+                {/* Conversation */}
                 {conversationHistory.map((msg, i) => {
                   const isStreaming = loading && i === conversationHistory.length - 1 && msg.type === "agent";
                   return (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, y: 14 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.3, ease: "easeOut" }}
-                      className="mb-5"
-                    >
+                    <motion.div key={i} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="mb-5">
                       {msg.type === "user" ? (
-                        /* User bubble */
                         <div className="flex gap-3 justify-end ml-auto max-w-2xl">
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.95, x: 10 }}
-                            animate={{ opacity: 1, scale: 1, x: 0 }}
-                            transition={{ duration: 0.22, ease: "easeOut" }}
-                            className="relative rounded-2xl rounded-tr-sm overflow-hidden"
-                          >
-                            <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 to-violet-600" />
-                            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
-                            <p className="relative z-10 px-5 py-3 text-sm font-medium text-white">{msg.text}</p>
-                          </motion.div>
-                          <div className="w-8 h-8 flex-shrink-0 mt-1 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
-                            <User className="w-3.5 h-3.5 text-white" />
-                          </div>
+                          <div className="btn-brand rounded-2xl rounded-tr-sm px-4 py-2.5 text-[14px] font-medium">{msg.text}</div>
+                          <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full btn-brand grid place-items-center"><User className="w-4 h-4 text-white" /></div>
                         </div>
                       ) : (
-                        /* Agent response */
                         <div className="flex flex-col gap-3">
-
-                          {/* Clarification card */}
+                          {/* Clarification */}
                           {msg.clarification && (
                             <div className="flex gap-3 max-w-2xl w-full">
-                              <div className="w-8 h-8 flex-shrink-0 mt-1 rounded-full bg-[rgba(99,102,241,0.15)] border border-[rgba(99,102,241,0.25)] flex items-center justify-center">
-                                <HelpCircle className="w-3.5 h-3.5 text-indigo-400" />
-                              </div>
-                              <div className="relative flex-1 rounded-2xl rounded-tl-sm overflow-hidden">
-                                <div className="absolute inset-0 bg-[rgba(99,102,241,0.06)] border border-[rgba(99,102,241,0.2)]" />
-                                <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-indigo-500/30 via-violet-500/20 to-transparent" />
-                                <div className="relative p-4">
-                                  <p className="text-[#C7D2FE] font-medium text-sm mb-3">{msg.clarification.question}</p>
-                                  {msg.clarification.options && msg.clarification.options.length > 0 ? (
-                                    <div className="flex flex-wrap gap-2">
-                                      {msg.clarification.options.map((opt, oi) => (
-                                        <button
-                                          key={oi}
-                                          onClick={() => handleClarification(opt)}
-                                          className="px-3.5 py-1.5 bg-[rgba(99,102,241,0.12)] border border-[rgba(99,102,241,0.25)] rounded-full text-indigo-200 text-xs font-medium hover:bg-[rgba(99,102,241,0.22)] hover:border-[rgba(99,102,241,0.45)] transition-all"
-                                        >
-                                          {opt}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <form
-                                      onSubmit={(e) => {
-                                        e.preventDefault();
-                                        const val = new FormData(e.currentTarget).get("clarify") as string;
-                                        if (val.trim()) handleClarification(val);
-                                      }}
-                                      className="flex gap-2 mt-1"
-                                    >
-                                      <input
-                                        type="text"
-                                        name="clarify"
-                                        placeholder="Type your answer…"
-                                        className="flex-1 px-3.5 py-2 rounded-xl border border-[rgba(99,130,220,0.15)] bg-[rgba(255,255,255,0.04)] text-white text-sm placeholder:text-[#9BB4D6] outline-none focus:border-[rgba(99,102,241,0.45)] transition-all"
-                                      />
-                                      <button
-                                        type="submit"
-                                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white text-sm font-semibold hover:opacity-90 transition-opacity"
-                                      >
-                                        Reply
-                                      </button>
-                                    </form>
-                                  )}
-                                </div>
+                              <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[var(--brand-soft)] border border-[var(--brand-line)] grid place-items-center"><HelpCircle className="w-4 h-4 text-[var(--brand)]" /></div>
+                              <div className="flex-1 rounded-2xl rounded-tl-sm surface p-4">
+                                <p className="text-[var(--fg)] font-medium text-[14px] mb-3">{msg.clarification.question}</p>
+                                {msg.clarification.options && msg.clarification.options.length > 0 ? (
+                                  <div className="flex flex-wrap gap-2">
+                                    {msg.clarification.options.map((opt, oi) => (
+                                      <button key={oi} onClick={() => handleClarification(opt)} className="px-3.5 py-1.5 rounded-full bg-[var(--brand-soft)] border border-[var(--brand-line)] text-[var(--brand)] text-[12.5px] font-medium hover:opacity-80 transition-opacity">{opt}</button>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <form onSubmit={(e) => { e.preventDefault(); const val = new FormData(e.currentTarget).get("clarify") as string; if (val.trim()) handleClarification(val); }} className="flex gap-2">
+                                    <input type="text" name="clarify" placeholder="Type your answer…" className="focus-ring flex-1 px-3.5 py-2 rounded-xl surface-2 text-[var(--fg)] text-[14px] placeholder:text-[var(--fg-faint)] outline-none" />
+                                    <button type="submit" className="btn-brand px-4 py-2 rounded-xl text-[13.5px] font-semibold">Reply</button>
+                                  </form>
+                                )}
                               </div>
                             </div>
                           )}
@@ -525,56 +468,42 @@ export default function Dashboard() {
                           {/* Text response */}
                           {msg.text && (
                             <div className="flex gap-3 max-w-2xl w-full">
-                              <div className="w-8 h-8 flex-shrink-0 mt-1 rounded-full bg-[rgba(56,189,248,0.12)] border border-[rgba(56,189,248,0.2)] flex items-center justify-center">
-                                <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
-                              </div>
-                              <div className="flex flex-col gap-2.5 flex-1">
-                                <motion.div
-                                  initial={{ opacity: 0, y: 6 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ duration: 0.28, ease: "easeOut" }}
-                                  className="relative rounded-2xl rounded-tl-sm overflow-hidden"
-                                >
-                                  <div className="absolute inset-0 bg-[rgba(7,17,31,0.9)] border border-[rgba(99,130,220,0.12)]" />
-                                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-sky-500/20 via-indigo-500/15 to-transparent" />
-                                  <div className="relative p-4 text-[13px] sm:text-sm text-[#A8B5D0] leading-relaxed">
-                                    {formatAgentText(msg.text)}
-                                    {isStreaming && (
-                                      <span className="inline-block w-0.5 h-3.5 bg-indigo-400 ml-0.5 align-middle rounded-sm cursor-blink" />
-                                    )}
-                                  </div>
-                                </motion.div>
+                              <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[var(--panel-2)] border border-[var(--line)] grid place-items-center"><MessageSquare className="w-4 h-4 text-[var(--accent)]" /></div>
+                              <div className="flex flex-col gap-2.5 flex-1 min-w-0">
+                                <div className="rounded-2xl rounded-tl-sm surface p-4 text-[14px] text-[var(--fg-dim)] leading-relaxed">
+                                  {formatAgentText(msg.text)}
+                                  {isStreaming && <span className="inline-block w-0.5 h-4 bg-[var(--brand)] ml-0.5 align-middle rounded-sm cursor-blink" />}
+                                </div>
 
-                                {/* Candidate count badge */}
-                                {msg.candidates && msg.candidates.length > 0 && (
-                                  <motion.button
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.97 }}
-                                    onClick={() => setViewedCandidatesIndex(i)}
-                                    className={`relative rounded-xl overflow-hidden max-w-[200px] w-full transition-all group/badge ${
-                                      msg.candidates === activeCandidates
-                                        ? "border border-[rgba(99,102,241,0.4)]"
-                                        : "border border-[rgba(99,130,220,0.1)] hover:border-[rgba(99,102,241,0.35)]"
-                                    }`}
-                                  >
-                                    <div className={`absolute inset-0 transition-opacity ${
-                                      msg.candidates === activeCandidates
-                                        ? "bg-[rgba(99,102,241,0.12)] opacity-100"
-                                        : "bg-[rgba(99,102,241,0.06)] opacity-0 group-hover/badge:opacity-100"
-                                    }`} />
-                                    <div className="relative p-2.5 flex items-center justify-between gap-2">
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded-md bg-[rgba(99,102,241,0.2)] flex items-center justify-center">
-                                          <Users className="w-3 h-3 text-indigo-400" />
-                                        </div>
-                                        <span className="text-[12px] font-semibold text-[#A8B5D0]">
-                                          {msg.candidates.length} candidates
-                                        </span>
-                                      </div>
-                                      <ChevronRight className="w-3.5 h-3.5 text-[#7A92B8] group-hover/badge:text-indigo-400 transition-colors" />
-                                    </div>
-                                  </motion.button>
-                                )}
+                                {/* Action chips: candidates + inspector */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {msg.candidates && msg.candidates.length > 0 && (
+                                    <button
+                                      onClick={() => openCandidates(i)}
+                                      className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors ${
+                                        selectedIdx === i && rightTab === "candidates"
+                                          ? "bg-[var(--brand-soft)] text-[var(--brand)] border border-[var(--brand-line)]"
+                                          : "surface-2 text-[var(--fg-dim)] hover:text-[var(--fg)]"
+                                      }`}
+                                    >
+                                      <Users className="w-3.5 h-3.5" /> {msg.candidates.length} candidate{msg.candidates.length !== 1 ? "s" : ""}
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  {debugMode && msg.debugInfo && (
+                                    <button
+                                      onClick={() => openInspector(i)}
+                                      className={`inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors ${
+                                        selectedIdx === i && rightTab === "inspector"
+                                          ? "bg-[var(--brand-soft)] text-[var(--brand)] border border-[var(--brand-line)]"
+                                          : "surface-2 text-[var(--fg-dim)] hover:text-[var(--fg)]"
+                                      }`}
+                                    >
+                                      <Bug className="w-3.5 h-3.5" /> Inspect run
+                                      <RunChips info={msg.debugInfo} />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           )}
@@ -584,46 +513,31 @@ export default function Dashboard() {
                   );
                 })}
 
-                {/* ── Streaming progress ───────────────────────────────────── */}
+                {/* Conversation-full banner */}
+                {latestSessionStatus?.shouldStartNewConversation && (
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex items-center gap-3 rounded-xl border border-[var(--warn-soft)] bg-[var(--warn-soft)] px-4 py-3">
+                    <AlertCircle className="w-4 h-4 text-[var(--warn)] shrink-0" />
+                    <span className="text-[13.5px] text-[var(--fg-dim)] flex-1">{latestSessionStatus.message ?? "This conversation is getting long."}</span>
+                    <button onClick={() => { loadSession("default"); resetQueryState(); }} className="text-[12px] font-semibold px-3 py-1.5 rounded-lg bg-[var(--warn-soft)] text-[var(--warn)] hover:opacity-80 transition-opacity shrink-0">New chat</button>
+                  </motion.div>
+                )}
+
+                {/* Streaming progress */}
                 <AnimatePresence>
                   {loading && loadingProgress && (
-                    <motion.div
-                      key="progress"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      transition={{ duration: 0.22, ease: "easeOut" }}
-                      className="mb-6"
-                    >
+                    <motion.div key="progress" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22 }} className="mb-6">
                       <div className="flex gap-3">
-                        <div className="w-8 h-8 flex-shrink-0 mt-1 rounded-full bg-[rgba(99,102,241,0.12)] border border-[rgba(99,102,241,0.2)] flex items-center justify-center">
-                          <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
-                        </div>
-                        <div className="relative rounded-2xl rounded-tl-sm overflow-hidden">
-                          <div className="absolute inset-0 bg-[rgba(7,17,31,0.9)] border border-[rgba(99,130,220,0.12)]" />
-                          {/* Animated gradient top border */}
-                          <div className="absolute inset-x-0 top-0 h-px progress-animated" />
-                          <div className="relative px-4 py-3 flex items-center gap-3">
-                            {/* Bouncing dots */}
-                            <div className="flex gap-1 flex-shrink-0">
+                        <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[var(--brand-soft)] border border-[var(--brand-line)] grid place-items-center"><Loader2 className="w-4 h-4 text-[var(--brand)] animate-spin" /></div>
+                        <div className="rounded-2xl rounded-tl-sm surface overflow-hidden">
+                          <div className="h-0.5 progress-animated" />
+                          <div className="px-4 py-3 flex items-center gap-3">
+                            <div className="flex gap-1 shrink-0">
                               {[0, 1, 2].map((j) => (
-                                <motion.div
-                                  key={j}
-                                  className="w-1.5 h-1.5 rounded-full bg-indigo-400"
-                                  animate={{ y: [0, -5, 0] }}
-                                  transition={{ duration: 0.7, repeat: Infinity, delay: j * 0.12, ease: "easeInOut" }}
-                                />
+                                <motion.div key={j} className="w-1.5 h-1.5 rounded-full bg-[var(--brand)]" animate={{ y: [0, -5, 0] }} transition={{ duration: 0.7, repeat: Infinity, delay: j * 0.12 }} />
                               ))}
                             </div>
                             <AnimatePresence mode="wait">
-                              <motion.span
-                                key={loadingProgress}
-                                initial={{ opacity: 0, x: 6 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: -6 }}
-                                transition={{ duration: 0.16, ease: "easeOut" }}
-                                className="text-sm text-[#C5D3F0]"
-                              >
+                              <motion.span key={loadingProgress} initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -6 }} transition={{ duration: 0.16 }} className="text-[14px] text-[var(--fg-dim)]">
                                 {loadingProgress}
                               </motion.span>
                             </AnimatePresence>
@@ -638,68 +552,96 @@ export default function Dashboard() {
               </div>
             </main>
 
-            {/* ── Floating input bar ─────────────────────────────────────── */}
-            <div className="absolute bottom-0 left-0 w-full px-4 sm:px-8 pb-5 pt-10 bg-gradient-to-t from-[#02060F] via-[#02060F]/90 to-transparent pointer-events-none z-20">
+            {/* Floating input */}
+            <div className="absolute bottom-0 left-0 w-full px-4 sm:px-8 pb-5 pt-12 pointer-events-none z-20" style={{ background: "linear-gradient(to top, var(--app-bg) 35%, transparent)" }}>
               <div className="max-w-3xl mx-auto pointer-events-auto">
                 <QueryInput onSearch={handleSearch} loading={loading || !session} />
+                {session && latestSessionStatus && (latestSessionStatus.softLimit ?? 0) > 0 && (
+                  <div className="mt-2 flex justify-end pr-1">
+                    <ContextMeter tokensUsed={latestSessionStatus.tokensUsed ?? 0} softLimit={latestSessionStatus.softLimit ?? 0} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          {/* ═══ RIGHT PANEL ════════════════════════════════════════════════ */}
+          {/* ═══ RIGHT DOCK ═══════════════════════════════════════════════════ */}
           <AnimatePresence>
-            {activeCandidates && activeCandidates.length > 0 && (
-              <motion.div
-                key="candidate-panel"
-                initial={{ x: 440, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: 440, opacity: 0 }}
-                transition={{ type: "spring", stiffness: 300, damping: 30, mass: 0.9 }}
-                className="hidden lg:flex w-[26rem] flex-col h-full flex-shrink-0 relative"
-                style={{ background: "rgba(7,17,31,0.95)" }}
+            {dockOpen && (
+              <motion.aside
+                key="dock"
+                initial={{ x: 460, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 460, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 300, damping: 32, mass: 0.9 }}
+                className="hidden lg:flex w-[30rem] flex-col h-full shrink-0 glass border-l border-[var(--line)]"
               >
-                {/* Left glow edge */}
-                <div className="absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-[rgba(99,102,241,0.25)] to-transparent" />
-                <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                  <div className="absolute -top-20 -right-10 w-60 h-60 rounded-full bg-[radial-gradient(circle,rgba(99,102,241,0.07)_0%,transparent_70%)]" />
+                {/* Dock tabs */}
+                <div className="p-3 border-b border-[var(--line)] flex items-center gap-1.5">
+                  <DockTab active={rightTab === "candidates"} onClick={() => setRightTab("candidates")} icon={<Users className="w-4 h-4" />} label="Candidates" count={hasCandidates ? activeCandidates!.length : undefined} />
+                  {debugMode && (
+                    <DockTab active={rightTab === "inspector"} onClick={() => setRightTab("inspector")} icon={<Bug className="w-4 h-4" />} label="Inspector" />
+                  )}
+                  {viewedTurnIndex !== null && (
+                    <button onClick={() => setViewedTurnIndex(null)} className="ml-auto text-[11px] font-medium text-[var(--fg-faint)] hover:text-[var(--fg)] px-2 py-1 rounded-md surface-2">
+                      Latest
+                    </button>
+                  )}
                 </div>
 
-                {/* Panel header */}
-                <div className="relative p-4 border-b border-[rgba(99,130,220,0.1)] flex items-center justify-between z-10">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-[rgba(99,102,241,0.15)] border border-[rgba(99,102,241,0.25)] flex items-center justify-center">
-                      <Users className="w-3.5 h-3.5 text-indigo-400" />
-                    </div>
-                    <h2 className="text-sm font-semibold text-white tracking-tight">Candidates</h2>
-                    {/* Animated count */}
-                    <AnimatePresence mode="wait">
-                      <motion.span
-                        key={activeCandidates.length}
-                        initial={{ opacity: 0, scale: 0.6 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.6 }}
-                        transition={{ duration: 0.2, ease: "backOut" }}
-                        className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full text-[10px] font-bold bg-[rgba(99,102,241,0.2)] text-indigo-300 border border-[rgba(99,102,241,0.3)]"
-                      >
-                        {activeCandidates.length}
-                      </motion.span>
-                    </AnimatePresence>
-                    {viewedCandidatesIndex !== null && (
-                      <span className="text-[9px] uppercase font-bold text-[#7A92B8] bg-[rgba(255,255,255,0.05)] px-2 py-0.5 rounded-md border border-[rgba(99,130,220,0.1)] tracking-wider">
-                        Past
-                      </span>
-                    )}
-                  </div>
+                <div className="flex-1 overflow-y-auto no-scrollbar p-3">
+                  {rightTab === "candidates" ? (
+                    hasCandidates ? <CandidateList candidates={activeCandidates} /> : <DockEmpty icon={<Users className="w-7 h-7" />} text="No candidates for this turn." />
+                  ) : (
+                    hasDebug ? <DebugPanel info={activeDebug!} visibleSections={debugSections} /> : <DockEmpty icon={<Bug className="w-7 h-7" />} text="No trace captured for this turn yet." />
+                  )}
                 </div>
-
-                {/* Candidates list */}
-                <div className="flex-1 overflow-y-auto no-scrollbar p-3 relative z-10">
-                  <CandidateList candidates={activeCandidates} />
-                </div>
-              </motion.div>
+              </motion.aside>
             )}
           </AnimatePresence>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Small inline helpers ─────────────────────────────────────────────────────
+
+function RunChips({ info }: { info: NonNullable<ReturnType<typeof useQuery>["conversationHistory"][number]["debugInfo"]> }) {
+  const totalMs = Object.values(info.summary?.nodeLatencies ?? {}).reduce((a, b) => a + b, 0);
+  const tokens = info.summary?.tokenUsage ? info.summary.tokenUsage.input + info.summary.tokenUsage.output : null;
+  const tools = info.toolObservations?.observations?.length ?? 0;
+  const path = info.summary?.executionPath ?? info.plan?.path;
+  return (
+    <span className="hidden sm:inline-flex items-center gap-2 ml-1 pl-2 border-l border-[var(--line-strong)] text-[11px] font-normal text-[var(--fg-faint)]">
+      {path && <span className="font-semibold text-[var(--brand)]">{String(path)}</span>}
+      {totalMs > 0 && <span className="inline-flex items-center gap-0.5"><Clock className="w-3 h-3" />{totalMs}ms</span>}
+      {tokens != null && <span className="inline-flex items-center gap-0.5"><Zap className="w-3 h-3" />{(tokens / 1000).toFixed(1)}k</span>}
+      {tools > 0 && <span className="inline-flex items-center gap-0.5"><Cpu className="w-3 h-3" />{tools}</span>}
+    </span>
+  );
+}
+
+function DockTab({ active, onClick, icon, label, count }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[13px] font-semibold transition-colors ${
+        active ? "bg-[var(--brand-soft)] text-[var(--brand)] border border-[var(--brand-line)]" : "text-[var(--fg-dim)] hover:bg-[var(--panel-2)] border border-transparent"
+      }`}
+    >
+      {icon}{label}
+      {count != null && (
+        <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold bg-[var(--brand-soft)] text-[var(--brand)]">{count}</span>
+      )}
+    </button>
+  );
+}
+
+function DockEmpty({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div className="h-full grid place-items-center text-center px-6">
+      <div>
+        <div className="w-14 h-14 rounded-2xl surface-2 grid place-items-center mx-auto mb-3 text-[var(--fg-faint)]">{icon}</div>
+        <p className="text-[13px] text-[var(--fg-faint)]">{text}</p>
       </div>
     </div>
   );
