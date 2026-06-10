@@ -69,8 +69,12 @@ export type DebugInfo = {
   sessionStatus?: {
     tokensUsed?: number;
     softLimit?: number;
+    percentUsed?: number;
     shouldStartNewConversation?: boolean;
     message?: string | null;
+    currentTurnTokens?: { input: number; output: number; thinking: number; total: number };
+    byPhase?: Record<string, { input: number; output: number; thinking: number; total: number }>;
+    toolStats?: { toolCalls: number; rowsReturned: number; tools: string[] };
   };
 };
 
@@ -520,8 +524,12 @@ export function useQuery(accessToken: string | null) {
                 debug.sessionStatus = {
                   tokensUsed:                 debugEvent['tokensUsed'] as number | undefined,
                   softLimit:                  debugEvent['softLimit'] as number | undefined,
+                  percentUsed:                debugEvent['percentUsed'] as number | undefined,
                   shouldStartNewConversation: debugEvent['shouldStartNewConversation'] as boolean | undefined,
                   message:                    debugEvent['message'] as string | null | undefined,
+                  currentTurnTokens:          debugEvent['currentTurnTokens'] as { input: number; output: number; thinking: number; total: number } | undefined,
+                  byPhase:                    debugEvent['byPhase'] as NonNullable<DebugInfo['sessionStatus']>['byPhase'],
+                  toolStats:                  debugEvent['toolStats'] as NonNullable<DebugInfo['sessionStatus']>['toolStats'],
                 };
                 break;
             }

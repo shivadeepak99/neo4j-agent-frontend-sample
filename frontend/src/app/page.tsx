@@ -513,15 +513,6 @@ export default function Dashboard() {
                   );
                 })}
 
-                {/* Conversation-full banner */}
-                {latestSessionStatus?.shouldStartNewConversation && (
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex items-center gap-3 rounded-xl border border-[var(--warn-soft)] bg-[var(--warn-soft)] px-4 py-3">
-                    <AlertCircle className="w-4 h-4 text-[var(--warn)] shrink-0" />
-                    <span className="text-[13.5px] text-[var(--fg-dim)] flex-1">{latestSessionStatus.message ?? "This conversation is getting long."}</span>
-                    <button onClick={() => { loadSession("default"); resetQueryState(); }} className="text-[12px] font-semibold px-3 py-1.5 rounded-lg bg-[var(--warn-soft)] text-[var(--warn)] hover:opacity-80 transition-opacity shrink-0">New chat</button>
-                  </motion.div>
-                )}
-
                 {/* Streaming progress */}
                 <AnimatePresence>
                   {loading && loadingProgress && (
@@ -555,12 +546,36 @@ export default function Dashboard() {
             {/* Floating input */}
             <div className="absolute bottom-0 left-0 w-full px-4 sm:px-8 pb-5 pt-12 pointer-events-none z-20" style={{ background: "linear-gradient(to top, var(--app-bg) 35%, transparent)" }}>
               <div className="max-w-3xl mx-auto pointer-events-auto">
-                <QueryInput onSearch={handleSearch} loading={loading || !session} />
-                {session && latestSessionStatus && (latestSessionStatus.softLimit ?? 0) > 0 && (
-                  <div className="mt-2 flex justify-end pr-1">
-                    <ContextMeter tokensUsed={latestSessionStatus.tokensUsed ?? 0} softLimit={latestSessionStatus.softLimit ?? 0} />
+                {/* Advisory nudge once the session crosses the soft limit. The
+                    agent still answers — this only suggests a fresh chat. Input
+                    is never blocked. */}
+                {session && latestSessionStatus?.shouldStartNewConversation && (
+                  <div className="mb-2 flex items-center justify-between gap-3 rounded-lg px-3 py-2 bg-[var(--warn-soft)] text-[var(--warn)] text-[12px]">
+                    <span>{latestSessionStatus.message ?? "This conversation is getting long. Starting a new chat keeps answers fast and accurate."}</span>
+                    <button
+                      onClick={() => { loadSession("default"); resetQueryState(); }}
+                      className="font-semibold px-2.5 py-1 rounded-md bg-[var(--warn)] text-white hover:opacity-80 transition-opacity shrink-0"
+                    >
+                      New chat
+                    </button>
                   </div>
                 )}
+                <div className="flex items-center gap-2.5 sm:gap-3">
+                  <div className="flex-1 min-w-0">
+                    <QueryInput onSearch={handleSearch} loading={loading || !session} />
+                  </div>
+                  {session && latestSessionStatus && (latestSessionStatus.softLimit ?? 0) > 0 && (
+                    <ContextMeter
+                      inline
+                      tokensUsed={latestSessionStatus.tokensUsed ?? 0}
+                      softLimit={latestSessionStatus.softLimit ?? 0}
+                      percentUsed={latestSessionStatus.percentUsed}
+                      currentTurnTokens={latestSessionStatus.currentTurnTokens}
+                      byPhase={latestSessionStatus.byPhase}
+                      toolStats={latestSessionStatus.toolStats}
+                    />
+                  )}
+                </div>
               </div>
             </div>
           </div>

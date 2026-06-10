@@ -24,8 +24,8 @@ export function QueryInput({ onSearch, loading }: QueryInputProps) {
 
   return (
     <form onSubmit={handleSubmit} className="w-full">
-      <div className="focus-ring flex items-center gap-2.5 rounded-2xl glass px-3.5 py-2.5 transition-shadow">
-        <Search className="w-4.5 h-4.5 text-[var(--fg-faint)] shrink-0" />
+      <div className="focus-ring group flex items-center gap-2.5 rounded-2xl glass px-3.5 py-2.5 transition-all duration-300 hover:border-[var(--brand-line)] hover:shadow-[var(--ring)]">
+        <Search className="w-4.5 h-4.5 text-[var(--fg-faint)] shrink-0 transition-colors group-focus-within:text-[var(--brand)]" />
         <input
           ref={inputRef}
           suppressHydrationWarning
