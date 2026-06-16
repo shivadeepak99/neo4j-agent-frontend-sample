@@ -11,7 +11,7 @@ import type { ChatMessage } from "@/lib/api-types";
 import {
   MessageSquare, Plus, Menu, X, HelpCircle, ChevronRight, Building,
   Trash2, User, Loader2, LogIn, LogOut, AlertCircle, Anchor, Sparkles,
-  Users, Moon, Sun, Bug, Clock, Zap, Cpu,
+  Users, Moon, Sun, Bug, Clock, Zap, Cpu, RotateCcw,
 } from "lucide-react";
 import { DebugPanel } from "@/components/DebugPanel";
 import type { DebugSections } from "@/components/DebugPanel";
@@ -475,8 +475,21 @@ export default function Dashboard() {
                                   {isStreaming && <span className="inline-block w-0.5 h-4 bg-[var(--brand)] ml-0.5 align-middle rounded-sm cursor-blink" />}
                                 </div>
 
-                                {/* Action chips: candidates + inspector */}
+                                {/* Action chips: retry + candidates + inspector */}
                                 <div className="flex flex-wrap items-center gap-2">
+                                  {msg.retryable && !loading && (
+                                    <button
+                                      onClick={() => {
+                                        // Resubmit the user query that produced this errored turn.
+                                        const priorUser = conversationHistory[i - 1];
+                                        const q = priorUser?.type === "user" ? priorUser.text : lastQuery;
+                                        if (q) handleSearch(q);
+                                      }}
+                                      className="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12.5px] font-semibold bg-[var(--warn-soft)] text-[var(--warn)] border border-[var(--warn-soft)] hover:opacity-80 transition-opacity"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" /> Try again
+                                    </button>
+                                  )}
                                   {msg.candidates && msg.candidates.length > 0 && (
                                     <button
                                       onClick={() => openCandidates(i)}
@@ -515,28 +528,46 @@ export default function Dashboard() {
 
                 {/* Streaming progress */}
                 <AnimatePresence>
-                  {loading && loadingProgress && (
+                  {loading && loadingProgress && (() => {
+                    // The summarize step is occasional (only when older turns age
+                    // out of the verbatim window). Surface it distinctly so the
+                    // user understands the brief extra wait is memory compaction,
+                    // not a stall.
+                    const isSummarizing = /summari/i.test(loadingProgress);
+                    return (
                     <motion.div key="progress" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.22 }} className="mb-6">
                       <div className="flex gap-3">
-                        <div className="w-8 h-8 shrink-0 mt-0.5 rounded-full bg-[var(--brand-soft)] border border-[var(--brand-line)] grid place-items-center"><Loader2 className="w-4 h-4 text-[var(--brand)] animate-spin" /></div>
-                        <div className="rounded-2xl rounded-tl-sm surface overflow-hidden">
+                        <div className={`w-8 h-8 shrink-0 mt-0.5 rounded-full grid place-items-center border ${isSummarizing ? "bg-[var(--warn-soft)] border-[var(--warn)]" : "bg-[var(--brand-soft)] border-[var(--brand-line)]"}`}>
+                          {isSummarizing
+                            ? <Cpu className="w-4 h-4 text-[var(--warn)] animate-pulse" />
+                            : <Loader2 className="w-4 h-4 text-[var(--brand)] animate-spin" />}
+                        </div>
+                        <div className={`rounded-2xl rounded-tl-sm surface overflow-hidden ${isSummarizing ? "ring-1 ring-[var(--warn)]/40" : ""}`}>
                           <div className="h-0.5 progress-animated" />
                           <div className="px-4 py-3 flex items-center gap-3">
-                            <div className="flex gap-1 shrink-0">
-                              {[0, 1, 2].map((j) => (
-                                <motion.div key={j} className="w-1.5 h-1.5 rounded-full bg-[var(--brand)]" animate={{ y: [0, -5, 0] }} transition={{ duration: 0.7, repeat: Infinity, delay: j * 0.12 }} />
-                              ))}
-                            </div>
+                            {!isSummarizing && (
+                              <div className="flex gap-1 shrink-0">
+                                {[0, 1, 2].map((j) => (
+                                  <motion.div key={j} className="w-1.5 h-1.5 rounded-full bg-[var(--brand)]" animate={{ y: [0, -5, 0] }} transition={{ duration: 0.7, repeat: Infinity, delay: j * 0.12 }} />
+                                ))}
+                              </div>
+                            )}
                             <AnimatePresence mode="wait">
-                              <motion.span key={loadingProgress} initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -6 }} transition={{ duration: 0.16 }} className="text-[14px] text-[var(--fg-dim)]">
-                                {loadingProgress}
-                              </motion.span>
+                              <motion.div key={loadingProgress} initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -6 }} transition={{ duration: 0.16 }} className="flex flex-col">
+                                <span className={`text-[14px] ${isSummarizing ? "text-[var(--warn)] font-semibold" : "text-[var(--fg-dim)]"}`}>
+                                  {loadingProgress}
+                                </span>
+                                {isSummarizing && (
+                                  <span className="text-[11px] text-[var(--fg-faint)]">Compressing older turns into long-term memory — keeps later answers fast.</span>
+                                )}
+                              </motion.div>
                             </AnimatePresence>
                           </div>
                         </div>
                       </div>
                     </motion.div>
-                  )}
+                    );
+                  })()}
                 </AnimatePresence>
 
                 <div ref={bottomRef} className="h-6" />

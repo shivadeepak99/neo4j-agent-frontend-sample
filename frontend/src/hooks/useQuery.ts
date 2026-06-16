@@ -89,6 +89,12 @@ export type HistoricalTurn = {
     options: string[];
   };
   debugInfo?: DebugInfo;
+  /**
+   * True when this agent turn was a retryable internal error (transient
+   * LLM/gate/Neo4j failure). The UI shows a one-click "Try again" that
+   * resubmits the same query. Set from the backend `responseMeta` debug event.
+   */
+  retryable?: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -520,6 +526,13 @@ export function useQuery(accessToken: string | null) {
               case 'summary':
                 debug.summary = debugEvent as unknown as DebugInfo['summary'];
                 break;
+              case 'responseMeta': {
+                // Mark the turn retryable so the UI can offer a one-click retry
+                // on a transient internal error (NOT a refusal or "no matches").
+                const retryable = debugEvent['retryable'] === true;
+                updateAgentMessage(current => ({ ...current, retryable }));
+                break;
+              }
               case 'sessionStatus':
                 debug.sessionStatus = {
                   tokensUsed:                 debugEvent['tokensUsed'] as number | undefined,
