@@ -1,135 +1,99 @@
-import { useState } from 'react';
-import type { ApiSession, Session, SessionDetail } from '@/lib/api-types';
-import { apiFetch } from '@/lib/api-client';
+"use client";
 
-const defaultSession = (): Session => ({
-  sessionId: 'default',
-  title: 'New Search',
-  createdAt: new Date().toISOString(),
+import { useCallback, useState } from "react";
+import type { ApiSession, Session, SessionDetail } from "@/lib/types";
+import { apiFetch } from "@/lib/api-client";
+
+const toSession = (s: ApiSession): Session => ({
+  sessionId: s.id,
+  title: s.title || "New chat",
+  createdAt: s.createdAt,
+  updatedAt: s.updatedAt,
 });
 
-const toSession = (session: ApiSession): Session => ({
-  sessionId: session.id,
-  title: session.title || 'New Search',
-  createdAt: session.createdAt,
-  updatedAt: session.updatedAt,
-});
-
+/**
+ * Real server-backed session list. Unlike the V2 hook there is no synthetic
+ * "default" session — the V3 agent requires a real session row (POST /api/sessions)
+ * before /api/query will accept a turn.
+ */
 export function useSessions(accessToken: string | null) {
-  const [sessions, setSessions] = useState<Session[]>([defaultSession()]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>('default');
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
-  const setActiveSession = (id: string) => {
-     setCurrentSessionId(id);
-  };
-
-  const createSession = async (title?: string) => {
-    if (!accessToken) return 'default';
-    const sessionTitle = title || 'New Search';
+  const list = useCallback(async (): Promise<Session[]> => {
+    if (!accessToken) return [];
     try {
-      const response = await apiFetch('/api/sessions', accessToken, {
-         method: 'POST',
-         body: JSON.stringify({ title: sessionTitle })
-      });
-
-      const newSession = toSession(response.session);
-      
-      setSessions(prev => {
-         if (prev.some(s => s.sessionId === newSession.sessionId)) return prev;
-         return [newSession, ...prev]; // Push newest session up top
-      });
-      setActiveSession(newSession.sessionId);
-      return newSession.sessionId;
+      const res = await apiFetch("/api/sessions", accessToken);
+      const rows: Session[] = (res?.sessions ?? []).map(toSession);
+      setSessions(rows);
+      return rows;
     } catch (e) {
-      console.error("Failed to create session against backend", e);
-      return 'default';
+      console.error("sessions.list failed", e);
+      return [];
     }
-  };
+  }, [accessToken]);
 
-  const loadSession = async (sessionId: string) => {
-    setActiveSession(sessionId);
-    if (sessionId === 'default') return null;
+  const create = useCallback(async (title?: string): Promise<string | null> => {
     if (!accessToken) return null;
-
     try {
-       const response = await apiFetch(`/api/sessions/${sessionId}`, accessToken);
-       const sessionDetail = response as SessionDetail;
-       
-       setSessions(prev => prev.map(s => 
-          s.sessionId === sessionId 
-            ? { ...s, title: sessionDetail.session?.title || s.title }
-            : s
-        ));
-        
-       return sessionDetail;
+      const res = await apiFetch("/api/sessions", accessToken, {
+        method: "POST",
+        body: JSON.stringify({ title: title || "New chat" }),
+      });
+      const s = toSession(res.session);
+      setSessions((prev) => [s, ...prev.filter((p) => p.sessionId !== s.sessionId)]);
+      setCurrentSessionId(s.sessionId);
+      return s.sessionId;
     } catch (e) {
-       console.error(`Failed to load history for ${sessionId}`, e);
-       return null;
+      console.error("sessions.create failed", e);
+      return null;
     }
-  };
+  }, [accessToken]);
 
-  const loadSessionsList = async () => {
-     if (!accessToken) {
-       setSessions([defaultSession()]);
-       setCurrentSessionId('default');
-       return [];
-     }
-     try {
-       const response = await apiFetch('/api/sessions', accessToken);
-       
-       if (response.sessions && Array.isArray(response.sessions)) {
-          const formattedSessions = response.sessions.map(toSession);
-          
-          const validFetched = formattedSessions.filter((s: Session) => s.sessionId && s.sessionId !== 'default');
-          
-          setSessions([
-            defaultSession(),
-            ...validFetched
-          ]);
-          
-          // Return valid fetched sessions so the caller can auto-load the most recent one
-          return validFetched;
-       }
-     } catch (e) {
-        console.error("Failed to load sessions list mapping via API.", e);
-        // Fallback or do nothing if disconnected
-     }
-     return [];
-  };
-
-  const resetSessionFilter = async (sessionId: string) => {
-    return sessionId === 'default';
-  }
-
-  const deleteSession = async (sessionId: string) => {
+  const loadDetail = useCallback(async (sessionId: string): Promise<SessionDetail | null> => {
+    if (!accessToken) return null;
     try {
-       if (sessionId === 'default') return true;
-       if (!accessToken) return false;
-       await apiFetch(`/api/sessions/${sessionId}`, accessToken, { method: 'DELETE' });
-       
-       setSessions(prev => prev.filter(s => s.sessionId !== sessionId));
-       if (currentSessionId === sessionId) {
-          setCurrentSessionId('default');
-       }
-       return true;
+      const res = (await apiFetch(`/api/sessions/${sessionId}`, accessToken)) as SessionDetail;
+      if (res?.session?.title) {
+        setSessions((prev) => prev.map((s) => (s.sessionId === sessionId ? { ...s, title: res.session.title } : s)));
+      }
+      return res;
     } catch (e) {
-      console.error(`Failed to delete session ${sessionId}`, e);
-      return false;
+      console.error("sessions.loadDetail failed", e);
+      return null;
     }
-  }
+  }, [accessToken]);
 
-  const switchSessionIdLocallyOnly = (id: string) => {
-      setCurrentSessionId(id);
-  }
+  const remove = useCallback(async (sessionId: string): Promise<void> => {
+    if (!accessToken) return;
+    try {
+      await apiFetch(`/api/sessions/${sessionId}`, accessToken, { method: "DELETE" });
+    } catch (e) {
+      console.error("sessions.remove failed", e);
+    }
+    setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+    setCurrentSessionId((cur) => (cur === sessionId ? null : cur));
+  }, [accessToken]);
+
+  /** Refresh a single session's title from the server (after first-message titling). */
+  const refreshTitle = useCallback(async (sessionId: string): Promise<void> => {
+    if (!accessToken) return;
+    try {
+      const res = (await apiFetch(`/api/sessions/${sessionId}`, accessToken)) as SessionDetail;
+      if (res?.session?.title) {
+        setSessions((prev) => prev.map((s) => (s.sessionId === sessionId ? { ...s, title: res.session.title } : s)));
+      }
+    } catch { /* ignore */ }
+  }, [accessToken]);
 
   return {
     sessions,
     currentSessionId,
-    createSession,
-    loadSession,
-    loadSessionsList,
-    resetSessionFilter,
-    deleteSession,
-    switchSessionIdLocallyOnly
+    setCurrentSessionId,
+    list,
+    create,
+    loadDetail,
+    remove,
+    refreshTitle,
   };
 }
