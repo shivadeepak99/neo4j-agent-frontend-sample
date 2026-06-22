@@ -1,23 +1,22 @@
 import type { Metadata } from "next";
-import { Fraunces, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Fraunces({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
+  variable: "--font-inter",
+  weight: ["400", "500", "600", "700"],
 });
 
-const body = Hanken_Grotesk({
+const space = Space_Grotesk({
   subsets: ["latin"],
-  variable: "--font-body",
+  variable: "--font-space",
   weight: ["400", "500", "600", "700"],
 });
 
 const mono = JetBrains_Mono({
   subsets: ["latin"],
-  variable: "--font-mono",
+  variable: "--font-jetbrains",
   weight: ["400", "500"],
 });
 
@@ -32,7 +31,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${display.variable} ${body.variable} ${mono.variable} dark h-full antialiased`}
+      className={`${inter.variable} ${space.variable} ${mono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full">{children}</body>
