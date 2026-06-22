@@ -1,6 +1,6 @@
 "use client";
 
-import { Anchor, Plus, MessageSquare, Trash2, LogOut, Building2, PanelLeftClose } from "lucide-react";
+import { Compass, Plus, MessagesSquare, Trash2, LogOut, Building2, PanelLeftClose } from "lucide-react";
 import type { Session } from "@/lib/types";
 
 interface SidebarProps {
@@ -19,66 +19,71 @@ export function Sidebar({
   sessions, currentSessionId, email, orgName, onSelect, onNew, onDelete, onSignOut, onToggle,
 }: SidebarProps) {
   return (
-    <aside className="flex h-full w-[272px] shrink-0 flex-col glass border-r">
+    <aside className="sidebar-panel flex h-full w-[272px] shrink-0 flex-col border-r">
+
       {/* Brand */}
-      <div className="flex items-center gap-2.5 border-b px-4 py-4">
-        <div className="brand-mark grid size-9 shrink-0 place-items-center rounded-xl btn-brass">
-          <Anchor className="size-4.5" />
+      <div className="flex items-center gap-3 border-b px-4 py-[17px]">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--teal-line)] bg-[var(--teal-soft)]">
+          <Compass className="size-4 text-[var(--teal)]" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="font-display text-[15px] font-semibold leading-none text-[var(--fg)]">Seafarer Graph</p>
-          <p className="mt-1 text-[11px] text-[var(--fg-faint)]">Maritime crew search</p>
+          <p
+            className="text-[14px] font-semibold leading-none tracking-tight text-[var(--fg)]"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            Seafarer Graph
+          </p>
+          <p className="mt-0.5 text-[11px] text-[var(--fg-3)]">MFA Intelligence</p>
         </div>
         {onToggle && (
           <button
             onClick={onToggle}
-            className="btn-ghost -mr-1 rounded-lg p-1.5"
+            className="btn-ghost -mr-1 p-1.5"
             aria-label="Collapse sidebar"
-            title="Collapse sidebar"
           >
-            <PanelLeftClose className="size-4.5" />
+            <PanelLeftClose className="size-4" />
           </button>
         )}
       </div>
 
       {/* New chat */}
-      <div className="p-3">
+      <div className="px-3 pb-2 pt-3">
         <button
           onClick={onNew}
-          className="btn-brass flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-[13.5px]"
+          className="btn-primary flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-[13px]"
         >
-          <Plus className="size-4" /> New chat
+          <Plus className="size-3.5" />
+          New conversation
         </button>
       </div>
 
-      {/* Sessions */}
-      <div className="scroll flex-1 space-y-1 overflow-y-auto px-2.5 pb-3">
-        <p className="tick px-2 py-1.5">Sessions</p>
+      {/* Sessions list */}
+      <div className="scroll flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
+        <p className="tag px-2.5 py-2">Conversations</p>
         {sessions.length === 0 && (
-          <p className="px-2 py-3 text-[12px] text-[var(--fg-faint)]">No sessions yet.</p>
+          <p className="px-2.5 py-3 text-[12px] text-[var(--fg-3)]">No conversations yet.</p>
         )}
         {sessions.map((s) => {
           const active = s.sessionId === currentSessionId;
           return (
             <div key={s.sessionId} className="group relative">
-              {active && (
-                <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[var(--brass)]" />
-              )}
               <button
                 onClick={() => onSelect(s.sessionId)}
-                className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-[13.5px] transition-all ${
+                className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-all ${
                   active
-                    ? "border-[var(--brass-line)] bg-[var(--brass-soft)] text-[var(--fg)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]"
-                    : "border-transparent text-[var(--fg-dim)] hover:bg-[var(--panel-2)] hover:text-[var(--fg)]"
+                    ? "border border-[var(--teal-line)] bg-[var(--teal-soft)] text-[var(--fg)]"
+                    : "border border-transparent text-[var(--fg-2)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)]"
                 }`}
               >
-                <MessageSquare className={`size-4 shrink-0 ${active ? "text-[var(--brass)]" : "text-[var(--fg-faint)]"}`} />
+                <MessagesSquare
+                  className={`size-3.5 shrink-0 ${active ? "text-[var(--teal)]" : "text-[var(--fg-3)]"}`}
+                />
                 <span className="truncate font-medium">{s.title}</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(s.sessionId); }}
-                className="btn-ghost absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 opacity-0 transition-opacity hover:text-[var(--danger)] group-hover:opacity-100"
-                aria-label="Delete session"
+                className="btn-ghost absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition-all hover:text-[var(--danger)] group-hover:opacity-100"
+                aria-label="Delete conversation"
               >
                 <Trash2 className="size-3.5" />
               </button>
@@ -87,18 +92,22 @@ export function Sidebar({
         })}
       </div>
 
-      {/* User */}
-      <div className="border-t p-3">
-        <div className="flex items-center gap-2.5 px-1.5">
-          <div className="grid size-8 shrink-0 place-items-center rounded-full surface-2">
-            <Building2 className="size-4 text-[var(--cyan)]" />
+      {/* User footer */}
+      <div className="border-t px-3 py-3">
+        <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)]">
+            <Building2 className="size-3.5 text-[var(--teal)]" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12px] font-medium text-[var(--fg-dim)]">{email ?? "Not signed in"}</p>
-            {orgName && <p className="truncate text-[11px] text-[var(--fg-faint)]">{orgName}</p>}
+            <p className="truncate text-[12px] font-medium text-[var(--fg-2)]">{email ?? "—"}</p>
+            {orgName && <p className="truncate text-[11px] text-[var(--fg-3)]">{orgName}</p>}
           </div>
-          <button onClick={onSignOut} className="btn-ghost rounded-md p-1.5 hover:text-[var(--danger)]" aria-label="Sign out">
-            <LogOut className="size-4" />
+          <button
+            onClick={onSignOut}
+            className="btn-ghost rounded p-1.5 hover:text-[var(--danger)]"
+            aria-label="Sign out"
+          >
+            <LogOut className="size-3.5" />
           </button>
         </div>
       </div>

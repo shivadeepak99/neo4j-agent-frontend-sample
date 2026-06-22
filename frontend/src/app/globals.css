@@ -3,186 +3,193 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ════════════════════════════════════════════════════════════════════════════
-   MFA · Seafarer Graph — "Harbour Console" theme
-   Dark, instrument-panel aesthetic: deep harbour ink, brass signal accent,
-   serif display + grotesk body + mono for data/Cypher.
+   MFA · Seafarer Graph — "Meridian" theme
+   Deep ocean slate, electric teal accent, violet for reasoning.
    ════════════════════════════════════════════════════════════════════════════ */
 :root {
-  --ink:        #0a0e13;
-  --ink-2:      #0d1219;
-  --panel:      #121a24;
-  --panel-2:    #18222e;
-  --panel-3:    #1e2a38;
+  /* Base */
+  --bg:           #080c14;
+  --bg-2:         #0b1020;
+  --surface:      #0f1621;
+  --surface-2:    #141d2d;
+  --surface-3:    #1a2538;
 
-  --line:       rgba(150, 180, 210, 0.10);
-  --line-2:     rgba(150, 180, 210, 0.18);
+  /* Borders */
+  --border:       rgba(99, 179, 237, 0.07);
+  --border-2:     rgba(99, 179, 237, 0.15);
 
-  --fg:         #e9eef5;
-  --fg-dim:     #aab6c6;
-  --fg-faint:   #6a7889;
+  /* Text */
+  --fg:           #e2e8f0;
+  --fg-2:         #94a3b8;
+  --fg-3:         #475569;
 
-  --brass:      #d8ab53;
-  --brass-2:    #e7c074;
-  --brass-soft: rgba(216, 171, 83, 0.12);
-  --brass-line: rgba(216, 171, 83, 0.32);
+  /* Teal — primary accent */
+  --teal:         #22d3ee;
+  --teal-2:       #67e8f9;
+  --teal-soft:    rgba(34, 211, 238, 0.08);
+  --teal-line:    rgba(34, 211, 238, 0.25);
 
-  --cyan:       #6bb6c6;
-  --cyan-soft:  rgba(107, 182, 198, 0.12);
+  /* Violet — reasoning / thinking */
+  --violet:       #a78bfa;
+  --violet-soft:  rgba(167, 139, 250, 0.08);
+  --violet-line:  rgba(167, 139, 250, 0.28);
 
-  --danger:     #e3685f;
-  --danger-soft: rgba(227, 104, 95, 0.12);
+  /* Danger */
+  --danger:       #f87171;
+  --danger-soft:  rgba(248, 113, 113, 0.10);
 
-  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  /* Warn */
+  --warn:         #fb923c;
+
+  /* Font stacks */
+  --font-display: var(--font-space), ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    var(--font-jetbrains), ui-monospace, monospace;
 }
 
-* { border-color: var(--line); }
-
+* { border-color: var(--border); }
 html, body { height: 100%; }
 
 body {
-  background-color: var(--ink);
+  background-color: var(--bg);
   color: var(--fg);
-  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-feature-settings: "ss01", "cv01";
-  /* Harbour grid texture + soft vignette */
   background-image:
-    radial-gradient(120% 80% at 50% -10%, rgba(216,171,83,0.05), transparent 60%),
-    radial-gradient(100% 60% at 100% 110%, rgba(107,182,198,0.045), transparent 55%),
-    linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
-  background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+    radial-gradient(ellipse 90% 55% at 15% -5%, rgba(34, 211, 238, 0.035), transparent 60%),
+    radial-gradient(ellipse 70% 45% at 85% 105%, rgba(167, 139, 250, 0.028), transparent 55%);
 }
-
-.font-display { font-family: var(--font-display), Georgia, serif; }
-.font-mono    { font-family: var(--font-mono), ui-monospace, monospace; }
 
 /* ── Surfaces ──────────────────────────────────────────────────────────────── */
 .surface {
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: var(--surface);
+  border: 1px solid var(--border);
 }
 .surface-2 {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
 }
-.glass {
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--panel) 28%, transparent), transparent 38%),
-    color-mix(in oklab, var(--ink-2) 88%, transparent);
-  backdrop-filter: blur(14px) saturate(125%);
-  border-color: var(--line);
+.surface-raised {
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  box-shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.55);
 }
 
-/* ── Brand mark — brass logo with a soft signal halo ──────────────────────────── */
-.brand-mark { position: relative; }
-.brand-mark::after {
-  content: "";
-  position: absolute;
-  inset: -45%;
-  border-radius: inherit;
-  background: radial-gradient(circle, rgba(216, 171, 83, 0.30), transparent 62%);
-  filter: blur(9px);
-  z-index: -1;
-  pointer-events: none;
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+.sidebar-panel {
+  background: color-mix(in oklab, var(--bg-2) 94%, transparent);
+  border-color: var(--border);
+  backdrop-filter: blur(12px);
 }
 
-/* ── Brass signal button ───────────────────────────────────────────────────── */
-.btn-brass {
-  background: linear-gradient(180deg, var(--brass-2), var(--brass));
-  color: #2a1e06;
+/* ── Primary (teal) button ─────────────────────────────────────────────────── */
+.btn-primary {
+  background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+  color: #030b14;
   font-weight: 600;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.25) inset, 0 6px 16px -8px rgba(216,171,83,0.6);
-  transition: filter 0.15s ease, transform 0.12s ease;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07) inset,
+    0 4px 18px -6px rgba(34, 211, 238, 0.45);
+  transition: filter 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
 }
-.btn-brass:hover:not(:disabled) { filter: brightness(1.06); }
-.btn-brass:active:not(:disabled) { transform: translateY(0.5px); }
-.btn-brass:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.1) inset, 0 6px 22px -6px rgba(34, 211, 238, 0.6);
+}
+.btn-primary:active:not(:disabled) { transform: translateY(0.5px); }
+.btn-primary:disabled { opacity: 0.38; cursor: not-allowed; }
 
+/* ── Ghost button ───────────────────────────────────────────────────────────── */
 .btn-ghost {
-  color: var(--fg-faint);
+  color: var(--fg-3);
   transition: color 0.15s ease, background 0.15s ease;
+  border-radius: 8px;
 }
-.btn-ghost:hover { color: var(--fg); background: var(--panel-2); }
+.btn-ghost:hover { color: var(--fg); background: var(--surface-2); }
 
-/* ── Composer — elevated input dock ──────────────────────────────────────────── */
+/* ── Composer ───────────────────────────────────────────────────────────────── */
 .composer {
-  background: linear-gradient(180deg, var(--panel-2), var(--panel));
-  border: 1px solid var(--line-2);
-  box-shadow: 0 10px 34px -18px rgba(0, 0, 0, 0.85), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  box-shadow: 0 8px 36px -14px rgba(0, 0, 0, 0.65), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
-/* Soft fade so the scrolling answer dissolves into the dock instead of cutting off. */
+.composer:focus-within {
+  border-color: var(--teal-line);
+  box-shadow: 0 8px 36px -14px rgba(0, 0, 0, 0.65), 0 0 0 1px var(--teal-soft);
+}
+
 .composer-dock { position: relative; }
 .composer-dock::before {
   content: "";
   position: absolute;
-  left: 0; right: 0; top: -28px;
-  height: 28px;
-  background: linear-gradient(to top, var(--ink), transparent);
+  left: 0; right: 0; top: -32px;
+  height: 32px;
+  background: linear-gradient(to top, var(--bg), transparent);
   pointer-events: none;
 }
 
 /* ── Focus ring ────────────────────────────────────────────────────────────── */
-.focus-ring:focus-visible,
-.focus-within-ring:focus-within {
+.focus-ring:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 1px var(--ink), 0 0 0 3px var(--brass-line);
+  box-shadow: 0 0 0 1px var(--bg), 0 0 0 3px var(--teal-line);
 }
 
-/* ── Chips / hairline rule ─────────────────────────────────────────────────── */
-.tick {
+/* ── Monospace tag label ───────────────────────────────────────────────────── */
+.tag {
   font-family: var(--font-mono), monospace;
   font-size: 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-3);
 }
 
-/* ── Markdown answer ───────────────────────────────────────────────────────── */
-.prose-chat { color: var(--fg-dim); font-size: 14.5px; line-height: 1.7; }
+/* ── Markdown prose ────────────────────────────────────────────────────────── */
+.prose-chat { color: var(--fg-2); font-size: 14.5px; line-height: 1.75; }
 .prose-chat strong { color: var(--fg); font-weight: 600; }
-.prose-chat a { color: var(--brass-2); text-decoration: underline; text-underline-offset: 2px; }
-.prose-chat p { margin: 0.5rem 0; }
-.prose-chat ul { margin: 0.5rem 0; padding-left: 1.1rem; list-style: disc; }
-.prose-chat ol { margin: 0.5rem 0; padding-left: 1.2rem; list-style: decimal; }
+.prose-chat a { color: var(--teal-2); text-decoration: underline; text-underline-offset: 2px; }
+.prose-chat p { margin: 0.45rem 0; }
+.prose-chat ul { margin: 0.45rem 0; padding-left: 1.2rem; list-style: disc; }
+.prose-chat ol { margin: 0.45rem 0; padding-left: 1.3rem; list-style: decimal; }
 .prose-chat li { margin: 0.2rem 0; }
-.prose-chat li::marker { color: var(--brass); }
+.prose-chat li::marker { color: var(--teal); }
 .prose-chat h1, .prose-chat h2, .prose-chat h3 {
-  font-family: var(--font-display), serif; color: var(--fg);
-  font-weight: 600; margin: 0.9rem 0 0.4rem;
+  color: var(--fg); font-weight: 600; margin: 0.9rem 0 0.35rem;
 }
 .prose-chat h2 { font-size: 1.05rem; }
-.prose-chat h3 { font-size: 0.98rem; }
+.prose-chat h3 { font-size: 0.95rem; }
 .prose-chat code {
-  font-family: var(--font-mono), monospace; font-size: 0.85em;
-  background: var(--panel-2); border: 1px solid var(--line);
-  padding: 0.05rem 0.35rem; border-radius: 5px; color: var(--cyan);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.84em;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  padding: 0.05rem 0.32rem;
+  border-radius: 4px;
+  color: var(--teal);
 }
 .prose-chat table { width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 13px; }
-.prose-chat th, .prose-chat td { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left; }
-.prose-chat th { color: var(--fg); background: var(--panel-2); font-weight: 600; }
+.prose-chat th, .prose-chat td { border: 1px solid var(--border); padding: 0.4rem 0.65rem; text-align: left; }
+.prose-chat th { color: var(--fg); background: var(--surface-2); font-weight: 600; }
 
 /* ── Scrollbar ─────────────────────────────────────────────────────────────── */
-.scroll::-webkit-scrollbar { width: 9px; height: 9px; }
-.scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
-.scroll::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); background-clip: content-box; }
+.scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 99px; }
+.scroll::-webkit-scrollbar-thumb:hover { background: var(--fg-3); }
 .scroll::-webkit-scrollbar-track { background: transparent; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { scrollbar-width: none; }
 
 /* ── Animations ────────────────────────────────────────────────────────────── */
-@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.fade-up { animation: fadeUp 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
-
-@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-.cursor-blink { animation: blink 1s steps(2) infinite; }
-
-@keyframes sweep { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-.sweep {
-  background: linear-gradient(90deg, transparent, var(--brass-line), transparent);
-  background-size: 200% 100%;
-  animation: sweep 1.4s ease-in-out infinite;
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
 }
+.fade-up { animation: fadeUp 0.25s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+/* ── Online status dot ─────────────────────────────────────────────────────── */
+.pulse-dot {
+  width: 6px; height: 6px;
+  border-radius: 9999px;
+  background: var(--teal);
+  box-shadow: 0 0 5px 2px rgba(34, 211, 238, 0.45);
+}
