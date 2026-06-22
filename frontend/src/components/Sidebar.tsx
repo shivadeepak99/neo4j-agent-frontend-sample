@@ -1,6 +1,6 @@
 "use client";
 
-import { Anchor, Plus, MessageSquare, Trash2, LogOut, Building2 } from "lucide-react";
+import { Anchor, Plus, MessageSquare, Trash2, LogOut, Building2, PanelLeftClose } from "lucide-react";
 import type { Session } from "@/lib/types";
 
 interface SidebarProps {
@@ -12,22 +12,33 @@ interface SidebarProps {
   onNew: () => void;
   onDelete: (id: string) => void;
   onSignOut: () => void;
+  onToggle?: () => void;
 }
 
 export function Sidebar({
-  sessions, currentSessionId, email, orgName, onSelect, onNew, onDelete, onSignOut,
+  sessions, currentSessionId, email, orgName, onSelect, onNew, onDelete, onSignOut, onToggle,
 }: SidebarProps) {
   return (
-    <aside className="flex h-full w-[264px] shrink-0 flex-col glass border-r">
+    <aside className="flex h-full w-[272px] shrink-0 flex-col glass border-r">
       {/* Brand */}
       <div className="flex items-center gap-2.5 border-b px-4 py-4">
-        <div className="grid size-9 shrink-0 place-items-center rounded-xl btn-brass">
+        <div className="brand-mark grid size-9 shrink-0 place-items-center rounded-xl btn-brass">
           <Anchor className="size-4.5" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="font-display text-[15px] font-semibold leading-none text-[var(--fg)]">Seafarer Graph</p>
           <p className="mt-1 text-[11px] text-[var(--fg-faint)]">Maritime crew search</p>
         </div>
+        {onToggle && (
+          <button
+            onClick={onToggle}
+            className="btn-ghost -mr-1 rounded-lg p-1.5"
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
+          >
+            <PanelLeftClose className="size-4.5" />
+          </button>
+        )}
       </div>
 
       {/* New chat */}
@@ -50,12 +61,15 @@ export function Sidebar({
           const active = s.sessionId === currentSessionId;
           return (
             <div key={s.sessionId} className="group relative">
+              {active && (
+                <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-[var(--brass)]" />
+              )}
               <button
                 onClick={() => onSelect(s.sessionId)}
-                className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-[13.5px] transition-colors ${
+                className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left text-[13.5px] transition-all ${
                   active
-                    ? "border-[var(--brass-line)] bg-[var(--brass-soft)] text-[var(--fg)]"
-                    : "border-transparent text-[var(--fg-dim)] hover:bg-[var(--panel-2)]"
+                    ? "border-[var(--brass-line)] bg-[var(--brass-soft)] text-[var(--fg)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]"
+                    : "border-transparent text-[var(--fg-dim)] hover:bg-[var(--panel-2)] hover:text-[var(--fg)]"
                 }`}
               >
                 <MessageSquare className={`size-4 shrink-0 ${active ? "text-[var(--brass)]" : "text-[var(--fg-faint)]"}`} />

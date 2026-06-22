@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UIMessage } from "ai";
-import { Anchor, Loader2, LogIn, AlertCircle } from "lucide-react";
+import { motion } from "framer-motion";
+import { Anchor, Loader2, LogIn, AlertCircle, PanelLeft } from "lucide-react";
 import { useSupabaseAuth } from "@/hooks/useSupabaseAuth";
 import { useSessions } from "@/hooks/useSessions";
 import { Sidebar } from "@/components/Sidebar";
@@ -22,13 +23,33 @@ export default function Home() {
 
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const bootstrapped = useRef(false);
+
+  // Restore the sidebar open/closed preference across reloads.
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("sidebarOpen") : null;
+    if (saved !== null) setSidebarOpen(saved === "1");
+  }, []);
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((o) => {
+      const next = !o;
+      try { window.localStorage.setItem("sidebarOpen", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   const selectSession = useCallback(async (id: string) => {
     setCurrentSessionId(id);
     setInitialMessages([]);
-    const detail = await sessions.loadDetail(id);
-    if (detail?.messages) setInitialMessages(toUiMessages(detail.messages));
+    setSessionLoading(true);
+    try {
+      const detail = await sessions.loadDetail(id);
+      if (detail?.messages) setInitialMessages(toUiMessages(detail.messages));
+    } finally {
+      setSessionLoading(false);
+    }
   }, [sessions, setCurrentSessionId]);
 
   const newChat = useCallback(async () => {
@@ -81,7 +102,12 @@ export default function Home() {
   // ── App ──────────────────────────────────────────────────────────────────────
   return (
     <div className="flex h-screen overflow-hidden">
-      <div className="hidden md:block">
+      <motion.div
+        initial={false}
+        animate={{ width: sidebarOpen ? 272 : 0 }}
+        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+        className="hidden shrink-0 overflow-hidden md:block"
+      >
         <Sidebar
           sessions={sessions.sessions}
           currentSessionId={currentSessionId}
@@ -91,10 +117,22 @@ export default function Home() {
           onNew={newChat}
           onDelete={handleDelete}
           onSignOut={signOut}
+          onToggle={toggleSidebar}
         />
-      </div>
+      </motion.div>
       <main className="relative min-w-0 flex-1">
-        {currentSessionId && !bootstrapping ? (
+        {/* Floating reopen control — only when the rail is collapsed. */}
+        <motion.button
+          initial={false}
+          animate={{ opacity: sidebarOpen ? 0 : 1, x: sidebarOpen ? -8 : 0, pointerEvents: sidebarOpen ? "none" : "auto" }}
+          transition={{ duration: 0.2 }}
+          onClick={toggleSidebar}
+          className="glass btn-ghost absolute left-4 top-4 z-20 hidden rounded-xl p-2 md:grid md:place-items-center"
+          aria-label="Open sidebar"
+        >
+          <PanelLeft className="size-4.5" />
+        </motion.button>
+        {currentSessionId && !bootstrapping && !sessionLoading ? (
           <Chat
             key={currentSessionId}
             sessionId={currentSessionId}

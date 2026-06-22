@@ -1,22 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Brain, Search, Users, ChevronDown, AlertCircle, ExternalLink, Send, Loader2, Compass,
+  Brain, Search, Users, ChevronDown, AlertCircle, ExternalLink, Send, Loader2, Anchor,
 } from "lucide-react";
 import { API_URL } from "@/lib/api-client";
 import type { Reference } from "@/lib/types";
-
-const SUGGESTIONS = [
-  "Masters with tanker experience",
-  "Crew who sailed with Anglo Eastern",
-  "Engineers with LNG experience and a valid COC",
-  "Top 5 by total sea service",
-];
+import { ContextMeter, type ContextStatus } from "@/components/ContextMeter";
 
 interface CypherOutput {
   rowCount?: number;
@@ -46,9 +40,13 @@ export function Chat({ sessionId, initialMessages, accessToken, onFirstReply }: 
       api: `${API_URL}/api/query`,
       headers: { Authorization: `Bearer ${accessToken}` },
       prepareSendMessagesRequest({ messages: msgs }) {
+        // NOTE: do NOT set Content-Type here. DefaultChatTransport already adds
+        // "Content-Type: application/json"; the SDK lowercases these returned
+        // headers, so adding it again yields a duplicate "content-type" that
+        // fetch() appends into "application/json, application/json" → Fastify 415.
         return {
           body: { message: msgs[msgs.length - 1], sessionId },
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: `Bearer ${accessToken}` },
         };
       },
     }),
@@ -62,6 +60,17 @@ export function Chat({ sessionId, initialMessages, accessToken, onFirstReply }: 
   });
 
   const busy = status === "submitted" || status === "streaming";
+
+  // Most recent turn's context-window telemetry (from the backend `data-context` part).
+  const latestCtx = useMemo<ContextStatus | null>(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "assistant") continue;
+      const part = (m.parts as Array<{ type: string; data?: unknown }>).find((p) => p.type === "data-context");
+      if (part?.data) return part.data as ContextStatus;
+    }
+    return null;
+  }, [messages]);
 
   const submit = (text?: string) => {
     const v = (text ?? input).trim();
@@ -88,7 +97,7 @@ export function Chat({ sessionId, initialMessages, accessToken, onFirstReply }: 
       {/* Stream */}
       <div className="scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-7 px-5 py-8 sm:px-8">
-          {messages.length === 0 && <EmptyState onPick={submit} disabled={busy} />}
+          {messages.length === 0 && <EmptyState />}
 
           {messages.map((m) => (
             <Message key={m.id} message={m} />
@@ -107,10 +116,10 @@ export function Chat({ sessionId, initialMessages, accessToken, onFirstReply }: 
       </div>
 
       {/* Composer */}
-      <div className="px-5 pb-5 pt-3 sm:px-8">
+      <div className="composer-dock px-5 pb-5 pt-3 sm:px-8">
         <form
           onSubmit={(e) => { e.preventDefault(); submit(); }}
-          className="focus-within-ring mx-auto flex max-w-3xl items-end gap-2 rounded-2xl surface px-3.5 py-2.5"
+          className="focus-within-ring composer mx-auto flex max-w-3xl items-end gap-2 rounded-2xl px-3.5 py-2.5"
         >
           <textarea
             ref={taRef}
@@ -132,39 +141,37 @@ export function Chat({ sessionId, initialMessages, accessToken, onFirstReply }: 
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
           </button>
         </form>
-        <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-[var(--fg-faint)]">
-          <kbd className="rounded border px-1">Enter</kbd> send · <kbd className="rounded border px-1">⇧ Enter</kbd> newline
-        </p>
+        <div className="mx-auto mt-2 flex max-w-3xl items-center justify-center gap-3">
+          <p className="text-[11px] text-[var(--fg-faint)]">
+            <kbd className="rounded border px-1">Enter</kbd> send · <kbd className="rounded border px-1">⇧ Enter</kbd> newline
+          </p>
+          {latestCtx && (
+            <>
+              <span className="text-[var(--line-2,#ffffff1a)]">|</span>
+              <ContextMeter ctx={latestCtx} />
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
 /* ── Empty state ───────────────────────────────────────────────────────────── */
-function EmptyState({ onPick, disabled }: { onPick: (s: string) => void; disabled: boolean }) {
+function EmptyState() {
   return (
-    <div className="fade-up pt-6">
-      <span className="tick">// natural language → neo4j</span>
-      <h1 className="font-display mt-3 text-3xl font-semibold tracking-tight text-[var(--fg)]">
+    <div className="fade-up flex min-h-[58vh] flex-col items-center justify-center text-center">
+      <div className="brand-mark grid size-14 place-items-center rounded-2xl btn-brass">
+        <Anchor className="size-7" />
+      </div>
+      <span className="tick mt-6">// natural language → neo4j</span>
+      <h1 className="font-display mt-3 text-[2.1rem] font-semibold tracking-tight text-[var(--fg)]">
         Ask the seafarer graph
       </h1>
-      <p className="mt-2 max-w-md text-sm text-[var(--fg-dim)]">
+      <p className="mt-3 max-w-md text-[14.5px] leading-relaxed text-[var(--fg-dim)]">
         Plain-English search over your organisation&apos;s crew. Every answer is grounded in the
         rows the agent actually retrieved.
       </p>
-      <div className="mt-6 grid gap-2 sm:grid-cols-2">
-        {SUGGESTIONS.map((s) => (
-          <button
-            key={s}
-            onClick={() => onPick(s)}
-            disabled={disabled}
-            className="group surface-2 flex items-center gap-2.5 rounded-xl px-3.5 py-3 text-left text-[13px] text-[var(--fg-dim)] transition-colors hover:border-[var(--brass-line)] hover:text-[var(--fg)]"
-          >
-            <Compass className="size-4 shrink-0 text-[var(--brass)] opacity-70 transition-opacity group-hover:opacity-100" />
-            {s}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
